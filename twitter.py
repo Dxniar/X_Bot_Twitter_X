@@ -1072,6 +1072,50 @@ class TwitterClient(TwitterAuth):
         logger.error(f"[Acc {self.account_id}] All FavoriteTweet queryIds exhausted for {tweet_id}")
         return False
 
+    async def bookmark_tweet(self, tweet_id: str) -> bool:
+        """Save tweet to bookmarks via v1.1 endpoint."""
+        from urllib.parse import urlparse
+
+        url = "https://x.com/i/api/1.1/bookmark/entries/add.json"
+        try:
+            self._refresh_request_headers(
+                f"https://x.com/i/status/{tweet_id}",
+                method="POST",
+                path=urlparse(url).path,
+            )
+            data = await self._post_form(url, {"tweet_id": tweet_id})
+            if data.get("bookmarked") is True or data.get("id_str"):
+                logger.success(f"[Acc {self.account_id}] 🔖 Bookmarked tweet {tweet_id}")
+                return True
+            if data.get("errors"):
+                logger.warning(
+                    f"[Acc {self.account_id}] bookmark_tweet errors: {str(data.get('errors'))[:120]}"
+                )
+            return False
+        except Exception as e:
+            logger.error(f"[Acc {self.account_id}] bookmark_tweet({tweet_id}) error: {e}")
+            return False
+
+    async def visit_profile(self, username: str) -> bool:
+        """Open user profile page after reply (human-like navigation)."""
+        if not username:
+            return False
+        profile_url = f"https://x.com/{username.lstrip('@')}"
+        try:
+            from urllib.parse import urlparse
+
+            self._refresh_request_headers(
+                profile_url, method="GET", path=urlparse(profile_url).path
+            )
+            resp = await self._client.get(profile_url)
+            ok = int(resp.status_code) < 400
+            if ok:
+                logger.info(f"[Acc {self.account_id}] 👀 Visited profile @{username}")
+            return ok
+        except Exception as e:
+            logger.debug(f"[Acc {self.account_id}] visit_profile({username}) error: {e}")
+            return False
+
     # ── Legacy REST methods (kept for reference) ──────────────────────
 
     async def _post_reply_v1(self, reply_text: str, in_reply_to_tweet_id: str,
