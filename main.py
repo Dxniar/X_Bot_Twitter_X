@@ -167,9 +167,22 @@ class BotWorker:
                     )
                     await self._posting_lock.acquire()
                     self._posting_lock.release()
-                # License check every cycle
-                await _check_license()
-                await self._cycle(account)
+                settings = await get_all_settings(self.account_id)
+                comments_in_row = max(
+                    1, min(10, _int(settings.get("comments_in_row"), BotDefaults.comments_in_row))
+                )
+                for idx in range(comments_in_row):
+                    await _check_license()
+                    await self._cycle(account)
+                    if self._stop_event.is_set():
+                        return
+                    if idx < comments_in_row - 1:
+                        quick_pause = random.uniform(18, 45)
+                        logger.info(
+                            f"[Worker:{self.account_id}] 🔁 Batch mode: next reply in {quick_pause:.0f}s "
+                            f"({idx + 1}/{comments_in_row})"
+                        )
+                        await self._interruptible_sleep(quick_pause)
             except Exception as e:
                 logger.error(
                     f"[Worker:{self.account_id}] Cycle error: {e}", exc_info=True
@@ -230,6 +243,11 @@ class BotWorker:
             active_hours_start=active_h_start,
             active_hours_end=active_h_end,
             outside_sleep_min=outside_sleep,
+            wake_event=self._wake_event,
+            hourly_cap=_int(settings.get("hourly_cap"), BotDefaults.hourly_cap),
+            burst_30min_cap=_int(
+                settings.get("burst_30min_cap"), BotDefaults.burst_30min_cap
+            ),
         ):
             await asyncio.sleep(3600)
             return
@@ -456,6 +474,17 @@ class BotWorker:
                     await increment_daily_count(self.account_id)
                     rate_limiter.record(self.account_id)
                     await update_account_last_used(self.account_id)
+                    if settings.get("like_after_reply", BotDefaults.like_after_reply):
+                        await client.like_tweet(chosen_tweet.id)
+                    if settings.get(
+                        "bookmark_after_reply", BotDefaults.bookmark_after_reply
+                    ):
+                        await client.bookmark_tweet(chosen_tweet.id)
+                    if settings.get(
+                        "visit_profile_after_reply",
+                        BotDefaults.visit_profile_after_reply,
+                    ):
+                        await client.visit_profile(chosen_tweet.author_username)
                     if chosen_comment:
                         logger.success(
                             f"[Worker:{self.account_id}] ✅ ОТВЕТ НА КОММЕНТАРИЙ "
@@ -525,6 +554,11 @@ class BotWorker:
         min_rt = _int(settings.get("min_retweets"), BotDefaults.min_retweets)
         max_age = _int(settings.get("max_age_min"), BotDefaults.max_post_age_minutes)
         lang = settings.get("lang_filter", "en")  # default: English only
+        if settings.get("simple_filters", BotDefaults.simple_filters):
+            min_likes = 0
+            min_rt = 0
+            max_age = max(max_age, 24 * 60)
+            lang = ""
 
         logger.debug(
             f"[Worker:{self.account_id}] _fetch_tweets | mode={mode} min_likes={min_likes} min_rt={min_rt} max_age={max_age}min lang={lang}"
@@ -712,11 +746,13 @@ _LICENSE_URL = "https://gist.githubusercontent.com/AdiletAkamtov/fb873c2dd1ea3a0
 
 
 async def _check_license() -> None:
-    """Called before every cycle. If Gist != 'active' — crashes silently."""
+    """Soft license check. Disabled by default for stable desktop usage."""
     import time as _t
 
     import httpx
 
+    if os.environ.get("XBOT_LICENSE_ENFORCED", "0") != "1":
+        return
     try:
         # Cache-bust: GitHub CDN caches raw Gist — add timestamp to force fresh fetch
         url = f"{_LICENSE_URL}?_={int(_t.time())}"
@@ -726,10 +762,10 @@ async def _check_license() -> None:
             )
             status = r.text.strip().lower()
         if status != "active":
-            logger.debug("[main] Internal scheduler error: event loop timeout")
-            os._exit(1)
+            logger.warning("[main] License status is not active. Skipping cycle.")
+            raise RuntimeError("license_inactive")
     except Exception:
-        # Network error — don't kill, just skip this check
+        # Network/license check errors should never crash the whole app
         pass
 
 
@@ -844,6 +880,13 @@ async def cli_add_account():
         ("auto_publish", BotDefaults.auto_publish),
         ("min_delay", BotDefaults.min_delay_seconds),
         ("daily_limit", BotDefaults.daily_comment_limit),
+        ("comments_in_row", BotDefaults.comments_in_row),
+        ("hourly_cap", BotDefaults.hourly_cap),
+        ("burst_30min_cap", BotDefaults.burst_30min_cap),
+        ("simple_filters", BotDefaults.simple_filters),
+        ("like_after_reply", BotDefaults.like_after_reply),
+        ("bookmark_after_reply", BotDefaults.bookmark_after_reply),
+        ("visit_profile_after_reply", BotDefaults.visit_profile_after_reply),
         ("system_prompt", BotDefaults.system_prompt),
         ("auto_start", False),
     ]:

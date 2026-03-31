@@ -661,6 +661,13 @@ class XBotApp(tk.Tk):
                     ("min_delay", BotDefaults.min_delay_seconds),
                     ("max_delay", BotDefaults.max_delay_seconds),
                     ("daily_limit", BotDefaults.daily_comment_limit),
+                    ("comments_in_row", BotDefaults.comments_in_row),
+                    ("hourly_cap", BotDefaults.hourly_cap),
+                    ("burst_30min_cap", BotDefaults.burst_30min_cap),
+                    ("simple_filters", BotDefaults.simple_filters),
+                    ("like_after_reply", BotDefaults.like_after_reply),
+                    ("bookmark_after_reply", BotDefaults.bookmark_after_reply),
+                    ("visit_profile_after_reply", BotDefaults.visit_profile_after_reply),
                     ("system_prompt", BotDefaults.system_prompt),
                     ("auto_start", False),
                 ]: await set_setting(aid, k, v)
@@ -866,6 +873,13 @@ class XBotApp(tk.Tk):
         field(1,1,"Auto Start",   "auto_start",   "check")
         field(2,1,"Delay (min) ±5m","min_delay_min")
         field(3,1,"Daily Limit",  "daily_limit")
+        field(4,1,"Comments In Row", "comments_in_row")
+        field(5,1,"Hourly Cap", "hourly_cap")
+        field(6,1,"Burst/30m Cap", "burst_30min_cap")
+        field(7,1,"Simple Filters", "simple_filters", "check")
+        field(8,1,"Like After Reply", "like_after_reply", "check")
+        field(9,1,"Bookmark After Reply", "bookmark_after_reply", "check")
+        field(10,1,"Visit Profile After", "visit_profile_after_reply", "check")
 
         def textarea(r, lbl, hint=""):
             tk.Label(card, text=lbl, font=("Segoe UI",9),
@@ -887,9 +901,9 @@ class XBotApp(tk.Tk):
                    sticky="ew", padx=(0,16), pady=6)
             return t
 
-        self._prompt_txt = textarea(6, "System Prompt")
-        self._kw_txt     = textarea(7, "Keywords",  "one per line")
-        self._list_txt   = textarea(8, "X Lists",   "one URL per line")
+        self._prompt_txt = textarea(11, "System Prompt")
+        self._kw_txt     = textarea(12, "Keywords",  "one per line")
+        self._list_txt   = textarea(13, "X Lists",   "one URL per line")
 
     def _test_run(self):
         """Run one full search+generate cycle without posting. Shows result in a popup."""
