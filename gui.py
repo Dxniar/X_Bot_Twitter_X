@@ -1097,14 +1097,14 @@ class XBotApp(tk.Tk):
                     return lines, None
 
                 post_url = f"https://x.com/{chosen_tweet.author_username}/status/{chosen_tweet.id}"
-                lines.append((f"\n📌 POST by @{chosen_tweet.author_username} (❤ {chosen_tweet.likes} | 🔁 {chosen_tweet.retweets})", "info"))
+                lines.append((f"📌 POST by @{chosen_tweet.author_username} (❤ {chosen_tweet.likes} | 🔁 {chosen_tweet.retweets})", "info"))
                 lines.append((chosen_tweet.text[:300], ""))
                 lines.append((f"🔗 {post_url}", ""))
-                lines.append((f"\n💬 TOP COMMENT by @{chosen_comment.author_username} (❤ {chosen_comment.likes})", "info"))
+                lines.append((f"💬 TOP COMMENT by @{chosen_comment.author_username} (❤ {chosen_comment.likes})", "info"))
                 lines.append((chosen_comment.text[:200], ""))
 
                 # ── Generate AI reply ──
-                lines.append(("\n🤖 Generating AI reply...", ""))
+                lines.append(("🤖 Generating AI reply...", ""))
                 try:
                     reply_text, prov = await generate_reply(
                         post_text=chosen_tweet.text,
@@ -1112,12 +1112,13 @@ class XBotApp(tk.Tk):
                         provider=ai_provider,
                         system_prompt=system_prompt,
                     )
-                    lines.append((f"\n✅ REPLY [{prov}]:", "ok"))
+                    lines.append((f"✅ REPLY [{prov}]:", "ok"))
                     lines.append((reply_text, "reply"))
                 except Exception as e:
-                    lines.append((f"\n❌ AI error: {e}", "err"))
+                    lines.append((f"❌ AI error: {e}", "err"))
 
-                lines.append(("\n⚠️  Nothing was posted — this is a dry run.", ""))
+                lines.append(("⚠️ Nothing was posted — this is a dry run.", ""))
+                lines.append(("ℹ️ To publish for real: run Start on account (or enable Auto Publish in Settings).", "info"))
                 return lines, None
 
         def _done(fut):
