@@ -72,6 +72,7 @@ class TwitterClient(TwitterAuth):
         super().__init__(*args, **kwargs)
         self._search_graphql_broken: bool = False
         self._search_account_restricted: bool = False
+        self._browser_poster_missing_logged: bool = False
 
     # ── Tweet parsing ──────────────────────────────────────────────────
 
@@ -992,12 +993,40 @@ class TwitterClient(TwitterAuth):
             )
             if tweet_id:
                 logger.success(f"[Acc {self.account_id}] ✅ Browser posted → {tweet_id}")
+                return tweet_id
+
+            logger.warning(f"[Acc {self.account_id}] Browser не смог опубликовать — fallback to API")
+        except ModuleNotFoundError as e:
+            if not self._browser_poster_missing_logged:
+                logger.warning(f"[Acc {self.account_id}] browser_poster недоступен: {e}")
+                self._browser_poster_missing_logged = True
             else:
-                logger.warning(f"[Acc {self.account_id}] Browser не смог опубликовать")
-            return tweet_id
+                logger.debug(f"[Acc {self.account_id}] browser_poster missing: {e}")
         except Exception as e:
-            logger.error(f"[Acc {self.account_id}] Browser post error: {e}")
-            return None
+            logger.warning(f"[Acc {self.account_id}] Browser post unavailable: {e}")
+
+        # Fallback chain when browser poster is unavailable/missing.
+        # Keep order stable: GraphQL first, then legacy REST variants.
+        methods = [
+            ("graphql", self._post_reply_graphql),
+            ("v1.1", self._post_reply_v1),
+            ("v1.1-alt", self._post_reply_v1_alt),
+        ]
+        for name, method in methods:
+            try:
+                tweet_id = await method(reply_text, in_reply_to_tweet_id, tweet_url=tweet_url)
+                if tweet_id:
+                    return tweet_id
+            except TwitterClient._PostRestricted:
+                logger.info(f"[Acc {self.account_id}] {name}: target post is restricted/unavailable")
+                return POST_UNAVAILABLE
+            except TwitterClient._PostUnavailable:
+                logger.info(f"[Acc {self.account_id}] {name}: target post unavailable")
+                return POST_UNAVAILABLE
+            except Exception as e:
+                logger.debug(f"[Acc {self.account_id}] {name} reply exception: {e}")
+
+        return None
 
     # ── Like tweet (Фаза 3 — FavoriteTweet GraphQL) ───────────────────
 
@@ -1295,7 +1324,10 @@ class TwitterClient(TwitterAuth):
                         return None
                     if code == 179:
                         logger.info(f"[Acc {self.account_id}] GraphQL 179 — reply restricted, skipping")
-                        return None
+                        raise TwitterClient._PostRestricted(f"code {code}: {msg}")
+                    if code == 433:
+                        logger.info(f"[Acc {self.account_id}] GraphQL 433 — author restricted replies, skipping")
+                        raise TwitterClient._PostRestricted(f"code {code}: {msg}")
                     if code in (32, 135, 326):
                         logger.error(
                             f"[Acc {self.account_id}] GraphQL blocked "
