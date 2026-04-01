@@ -247,9 +247,7 @@ class BotWorker:
         outside_sleep = _int(
             settings.get("outside_sleep_min"), BotDefaults.outside_sleep_min
         )
-        if not await rate_limiter.wait_if_needed(
-            self.account_id,
-            daily_limit,
+        wait_kwargs = dict(
             active_hours_start=active_h_start,
             active_hours_end=active_h_end,
             outside_sleep_min=outside_sleep,
@@ -258,7 +256,28 @@ class BotWorker:
             burst_30min_cap=_int(
                 settings.get("burst_30min_cap"), BotDefaults.burst_30min_cap
             ),
-        ):
+        )
+        try:
+            can_continue = await rate_limiter.wait_if_needed(
+                self.account_id, daily_limit, **wait_kwargs
+            )
+        except TypeError as e:
+            if "unexpected keyword argument" not in str(e):
+                raise
+            logger.warning(
+                "[RateLimiter] Legacy signature detected. "
+                "Retrying without hourly_cap/burst_30min_cap."
+            )
+            can_continue = await rate_limiter.wait_if_needed(
+                self.account_id,
+                daily_limit,
+                active_hours_start=active_h_start,
+                active_hours_end=active_h_end,
+                outside_sleep_min=outside_sleep,
+                wake_event=self._wake_event,
+            )
+
+        if not can_continue:
             await asyncio.sleep(3600)
             return
 
