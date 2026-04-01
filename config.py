@@ -1,5 +1,5 @@
 """
-config.py - settings, logging, crypto, anti-detect helpers, runtime limits.
+config.py - settings, logging, crypto, runtime paths and rate limits.
 """
 
 from __future__ import annotations
@@ -18,27 +18,48 @@ from loguru import logger
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Writable base dir (important for PyInstaller in Program Files)
-if getattr(sys, "frozen", False):
-    _appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
-    BASE_DIR = Path(_appdata) / "XBot"
-    EXE_DIR = Path(sys.executable).parent
-else:
-    BASE_DIR = Path(__file__).parent
-    EXE_DIR = BASE_DIR
+
+def _resolve_runtime_paths() -> tuple[Path, Path]:
+    """Return writable BASE_DIR and executable directory."""
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        appdata = Path(os.environ.get("APPDATA") or Path.home()) / "XBot"
+        appdata.mkdir(parents=True, exist_ok=True)
+        return appdata, exe_dir
+    base = Path(__file__).resolve().parent
+    return base, base
+
+
+BASE_DIR, EXE_DIR = _resolve_runtime_paths()
+MEIPASS_DIR = Path(getattr(sys, "_MEIPASS", EXE_DIR))
 
 _ENV_FILE = BASE_DIR / ".env"
+_ALT_ENV_FILE = EXE_DIR / ".env"
 _DB_DIR = BASE_DIR / "data"
 _LOG_DIR = BASE_DIR / "logs"
-for _d in (BASE_DIR, _DB_DIR, _LOG_DIR):
+for _d in (_DB_DIR, _LOG_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 
-def _ensure_env_file() -> None:
+def _effective_env_file() -> Path:
+    """Prefer writable APPDATA env, but support migration from exe-local .env."""
     if _ENV_FILE.exists():
+        return _ENV_FILE
+    if getattr(sys, "frozen", False) and _ALT_ENV_FILE.exists():
+        try:
+            _ENV_FILE.write_text(_ALT_ENV_FILE.read_text(encoding="utf-8"), encoding="utf-8")
+            return _ENV_FILE
+        except Exception:
+            return _ALT_ENV_FILE
+    return _ENV_FILE
+
+
+def _ensure_env_file() -> None:
+    env_path = _effective_env_file()
+    if env_path.exists():
         return
     key = Fernet.generate_key().decode()
-    _ENV_FILE.write_text(
+    env_path.write_text(
         f"ENCRYPTION_KEY={key}\n"
         "OPENAI_API_KEY=\n"
         "GEMINI_API_KEY=\n"
@@ -52,10 +73,11 @@ def _ensure_env_file() -> None:
 
 
 _ensure_env_file()
+_ENV_IN_USE = _effective_env_file()
 
 
 def save_env_value(key: str, value: str) -> None:
-    lines = _ENV_FILE.read_text(encoding="utf-8").splitlines() if _ENV_FILE.exists() else []
+    lines = _ENV_IN_USE.read_text(encoding="utf-8").splitlines() if _ENV_IN_USE.exists() else []
     new_lines: list[str] = []
     updated = False
     for line in lines:
@@ -66,11 +88,11 @@ def save_env_value(key: str, value: str) -> None:
             new_lines.append(line)
     if not updated:
         new_lines.append(f"{key}={value}")
-    _ENV_FILE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    _ENV_IN_USE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
 
 class AppSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
+    model_config = SettingsConfigDict(env_file=str(_ENV_IN_USE), extra="ignore")
 
     encryption_key: str = Field(alias="ENCRYPTION_KEY")
 
@@ -88,6 +110,7 @@ class AppSettings(BaseSettings):
 
     db_path: Path = _DB_DIR / "xbot.db"
     log_file: Path = _LOG_DIR / "xbot.log"
+    app_log_file: Path = _LOG_DIR / "app.log"
     log_level: str = "INFO"
 
     @field_validator("telegram_admin_ids", mode="before")
@@ -117,6 +140,9 @@ class BotDefaults:
     active_hours_end = 23
     outside_sleep_min = 300
     comments_in_row = 1
+    max_actions_per_cycle = 1
+    action_pause_seconds = 20
+    enable_manual_extra_actions = False
     hourly_cap = 12
     burst_30min_cap = 6
     simple_filters = False
@@ -154,14 +180,17 @@ def _setup_logger() -> None:
         s = get_settings()
         level = s.log_level
         log_file = s.log_file
+        app_log_file = s.app_log_file
     except Exception:
         level = "INFO"
         log_file = _LOG_DIR / "xbot.log"
+        app_log_file = _LOG_DIR / "app.log"
 
     log_file.parent.mkdir(parents=True, exist_ok=True)
     logger.remove()
-    logger.add(sys.stderr, level=level, enqueue=True)
+    logger.add(sys.stderr, level=level, enqueue=True, backtrace=True, diagnose=True)
     logger.add(str(log_file), level=level, enqueue=True, rotation="10 MB", retention=7)
+    logger.add(str(app_log_file), level="INFO", enqueue=True, rotation="10 MB", retention=7, backtrace=True, diagnose=True)
 
     for noisy in ("httpx", "httpcore", "telegram", "apscheduler"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
@@ -300,46 +329,6 @@ class RateLimiter:
 rate_limiter = RateLimiter()
 _setup_logger()
 
-
-async def compose_delay(reply_text: str) -> None:
-    cps = random.uniform(3, 8)
-    await asyncio.sleep(max(2.0, len(reply_text) / cps))
-
-
-class RateLimiter:
-    def __init__(self):
-        self._history: dict[int, list[float]] = {}
-
-    def record(self, account_id: int) -> None:
-        now = time.monotonic()
-        self._history.setdefault(account_id, []).append(now)
-        self._history[account_id] = [t for t in self._history[account_id] if t > now - 86400]
-
-    def count_last_30min(self, account_id: int) -> int:
-        cutoff = time.monotonic() - 1800
-        return sum(1 for t in self._history.get(account_id, []) if t > cutoff)
-
-    def count_last_hour(self, account_id: int) -> int:
-        cutoff = time.monotonic() - 3600
-        return sum(1 for t in self._history.get(account_id, []) if t > cutoff)
-
-    def count_today(self, account_id: int) -> int:
-        cutoff = time.monotonic() - 86400
-        return sum(1 for t in self._history.get(account_id, []) if t > cutoff)
-
-    @staticmethod
-    def _is_active_hours(start: int = 8, end: int = 23) -> bool:
-        hour = time.localtime().tm_hour
-        return start <= hour < end
-
-    async def wait_if_needed(
-        self,
-        account_id: int,
-        daily_limit: int = 300,
-        active_hours_start: int = 8,
-        active_hours_end: int = 23,
-        outside_sleep_min: int = 300,
-        wake_event: "asyncio.Event | None" = None,
     ) -> bool:
         if self.count_today(account_id) >= daily_limit:
             logger.warning(f"[Acc {account_id}] Daily limit reached ({daily_limit})")
