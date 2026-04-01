@@ -40,13 +40,17 @@ import state
 # Logger noise-suppression is handled centrally in config._setup_logger().
 from ai import generate_reply
 from config import (
+    BASE_DIR,
+    _ENV_IN_USE,
     BotDefaults,
     compose_delay,
     generate_key,
+    get_settings,
     logger,
     rate_limiter,
     read_delay,
 )
+from filters import TweetFilterPolicy
 from db import (
     get_account,
     get_accounts,
@@ -168,19 +172,25 @@ class BotWorker:
                     await self._posting_lock.acquire()
                     self._posting_lock.release()
                 settings = await get_all_settings(self.account_id)
-                comments_in_row = max(
-                    1, min(10, _int(settings.get("comments_in_row"), BotDefaults.comments_in_row))
+                actions_per_cycle = _int(
+                    settings.get("max_actions_per_cycle", settings.get("comments_in_row")),
+                    BotDefaults.max_actions_per_cycle,
                 )
-                for idx in range(comments_in_row):
-                    await _check_license()
+                actions_per_cycle = max(1, min(10, actions_per_cycle))
+                action_pause = max(5, _int(settings.get("action_pause_seconds"), BotDefaults.action_pause_seconds))
+                for idx in range(actions_per_cycle):
+                    if not await _check_license():
+                        logger.warning(f"[Worker:{self.account_id}] License inactive. Waiting before next cycle.")
+                        await self._interruptible_sleep(60)
+                        continue
                     await self._cycle(account)
                     if self._stop_event.is_set():
                         return
-                    if idx < comments_in_row - 1:
-                        quick_pause = random.uniform(18, 45)
+                    if idx < actions_per_cycle - 1:
+                        quick_pause = float(action_pause)
                         logger.info(
                             f"[Worker:{self.account_id}] 🔁 Batch mode: next reply in {quick_pause:.0f}s "
-                            f"({idx + 1}/{comments_in_row})"
+                            f"({idx + 1}/{actions_per_cycle})"
                         )
                         await self._interruptible_sleep(quick_pause)
             except Exception as e:
@@ -237,9 +247,7 @@ class BotWorker:
         outside_sleep = _int(
             settings.get("outside_sleep_min"), BotDefaults.outside_sleep_min
         )
-        if not await rate_limiter.wait_if_needed(
-            self.account_id,
-            daily_limit,
+        wait_kwargs = dict(
             active_hours_start=active_h_start,
             active_hours_end=active_h_end,
             outside_sleep_min=outside_sleep,
@@ -248,7 +256,28 @@ class BotWorker:
             burst_30min_cap=_int(
                 settings.get("burst_30min_cap"), BotDefaults.burst_30min_cap
             ),
-        ):
+        )
+        try:
+            can_continue = await rate_limiter.wait_if_needed(
+                self.account_id, daily_limit, **wait_kwargs
+            )
+        except TypeError as e:
+            if "unexpected keyword argument" not in str(e):
+                raise
+            logger.warning(
+                "[RateLimiter] Legacy signature detected. "
+                "Retrying without hourly_cap/burst_30min_cap."
+            )
+            can_continue = await rate_limiter.wait_if_needed(
+                self.account_id,
+                daily_limit,
+                active_hours_start=active_h_start,
+                active_hours_end=active_h_end,
+                outside_sleep_min=outside_sleep,
+                wake_event=self._wake_event,
+            )
+
+        if not can_continue:
             await asyncio.sleep(3600)
             return
 
@@ -550,18 +579,14 @@ class BotWorker:
 
     async def _fetch_tweets(self, client: TwitterClient, settings: dict):
         mode = settings.get("search_mode", BotDefaults.search_mode)
-        min_likes = _int(settings.get("min_likes"), BotDefaults.min_likes)
-        min_rt = _int(settings.get("min_retweets"), BotDefaults.min_retweets)
-        max_age = _int(settings.get("max_age_min"), BotDefaults.max_post_age_minutes)
-        lang = settings.get("lang_filter", "en")  # default: English only
-        if settings.get("simple_filters", BotDefaults.simple_filters):
-            min_likes = 0
-            min_rt = 0
-            max_age = max(max_age, 24 * 60)
-            lang = ""
+        filter_cfg = TweetFilterPolicy.from_settings(settings)
+        min_likes = filter_cfg.min_likes
+        min_rt = filter_cfg.min_retweets
+        max_age = filter_cfg.max_age_minutes
+        lang = filter_cfg.lang
 
-        logger.debug(
-            f"[Worker:{self.account_id}] _fetch_tweets | mode={mode} min_likes={min_likes} min_rt={min_rt} max_age={max_age}min lang={lang}"
+        logger.info(
+            f"[Worker:{self.account_id}] Filters loaded | mode={mode} min_likes={min_likes} min_rt={min_rt} max_age={max_age}min lang={lang or 'any'}"
         )
 
         if mode == "keywords":
@@ -745,14 +770,15 @@ def _int(val, default: int) -> int:
 _LICENSE_URL = "https://gist.githubusercontent.com/AdiletAkamtov/fb873c2dd1ea3a0aa994e38083180393/raw/license.txt"
 
 
-async def _check_license() -> None:
+async def _check_license() -> bool:
     """Soft license check. Disabled by default for stable desktop usage."""
     import time as _t
 
     import httpx
 
     if os.environ.get("XBOT_LICENSE_ENFORCED", "0") != "1":
-        return
+        logger.info("[License] Skipped (XBOT_LICENSE_ENFORCED=0)")
+        return True
     try:
         # Cache-bust: GitHub CDN caches raw Gist — add timestamp to force fresh fetch
         url = f"{_LICENSE_URL}?_={int(_t.time())}"
@@ -762,16 +788,29 @@ async def _check_license() -> None:
             )
             status = r.text.strip().lower()
         if status != "active":
-            logger.warning("[main] License status is not active. Skipping cycle.")
-            raise RuntimeError("license_inactive")
-    except Exception:
-        # Network/license check errors should never crash the whole app
-        pass
+            logger.warning(f"[License] status={status}. Cycle blocked.")
+            return False
+        logger.info("[License] status=active")
+        return True
+    except Exception as e:
+        logger.error(f"[License] check failed: {e}", exc_info=True)
+        return True
 
 
 # ─────────────────────────────────────────────
 # MAIN — BOT START
 # ─────────────────────────────────────────────
+
+
+def get_startup_diagnostics() -> dict:
+    s = get_settings()
+    return {
+        "base_dir": str(BASE_DIR),
+        "env_file": str(_ENV_IN_USE),
+        "telegram_token_set": bool(s.telegram_bot_token),
+        "telegram_admin_ids": s.telegram_admin_ids,
+    }
+
 
 
 async def main() -> None:
@@ -881,6 +920,9 @@ async def cli_add_account():
         ("min_delay", BotDefaults.min_delay_seconds),
         ("daily_limit", BotDefaults.daily_comment_limit),
         ("comments_in_row", BotDefaults.comments_in_row),
+        ("max_actions_per_cycle", BotDefaults.max_actions_per_cycle),
+        ("action_pause_seconds", BotDefaults.action_pause_seconds),
+        ("enable_manual_extra_actions", BotDefaults.enable_manual_extra_actions),
         ("hourly_cap", BotDefaults.hourly_cap),
         ("burst_30min_cap", BotDefaults.burst_30min_cap),
         ("simple_filters", BotDefaults.simple_filters),

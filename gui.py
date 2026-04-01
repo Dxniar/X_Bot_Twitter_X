@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import traceback
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from typing import Optional
@@ -152,6 +153,7 @@ class XBotApp(tk.Tk):
         try: run_sync(self._init_db())
         except Exception: pass
         self._tg_running = False
+        self._worker_action_in_progress: set[int] = set()
         self._apply_styles()
         self._build_ui()
         self._refresh_all()
@@ -496,9 +498,11 @@ class XBotApp(tk.Tk):
                     w["status_lbl"].config(
                         text="🟢 Running" if running else "⚪ Stopped",
                         fg=C["green"] if running else C["muted"])
+                    is_busy = acc_id in self._worker_action_in_progress
                     w["toggle_btn"].config(
-                        text="⏹  Stop" if running else "▶  Start",
-                        bg=C["yellow"] if running else C["green"])
+                        text="⏳  Working..." if is_busy else ("⏹  Stop" if running else "▶  Start"),
+                        bg=C["yellow"] if running else C["green"],
+                        state="disabled" if is_busy else "normal")
                 else:
                     # Build new row card
                     bg = C["surface"] if i % 2 == 0 else C["row_alt"]
@@ -693,41 +697,81 @@ class XBotApp(tk.Tk):
 
     def _start_worker(self):
         acc_id = self._sel_acc_id()
-        if not acc_id: return
-        _logger.info(f"[GUI] Запуск воркера acc_id={acc_id}")
+        if not acc_id:
+            return
+        if acc_id in self._worker_action_in_progress:
+            _logger.warning(f"[GUI] Start ignored for acc_id={acc_id}: action already in progress")
+            return
+
+        self._worker_action_in_progress.add(acc_id)
+        self._set_row_loading(acc_id, True)
+        _logger.info(f"[GUI] Start clicked acc_id={acc_id}")
+
         async def _go():
-            from main import worker_manager
+            from main import get_startup_diagnostics, worker_manager
+            diag = get_startup_diagnostics()
+            _logger.info(f"[GUI] Startup diagnostics: {diag}")
             return await worker_manager.start(acc_id)
+
         def _done(fut):
             try:
                 ok = fut.result()
-                self._refresh_accounts()
                 if ok:
-                    _logger.success(f"[GUI] ✅ Воркер acc_id={acc_id} запущен")
+                    _logger.success(f"[GUI] ✅ Worker started acc_id={acc_id}")
                 else:
-                    _logger.info(f"[GUI] Воркер acc_id={acc_id} уже запущен")
+                    _logger.info(f"[GUI] Worker already running acc_id={acc_id}")
                     messagebox.showinfo("Info", f"Worker {acc_id} already running", parent=self)
             except Exception as e:
-                _logger.error(f"[GUI] Ошибка запуска воркера acc_id={acc_id}: {e}")
-                messagebox.showerror("Error", str(e), parent=self)
+                _logger.error(f"[GUI] Start failed acc_id={acc_id}: {e}\n{traceback.format_exc()}")
+                messagebox.showerror("Start error", f"Не удалось запустить задачу.\n{e}", parent=self)
+            finally:
+                self._worker_action_in_progress.discard(acc_id)
+                self._set_row_loading(acc_id, False)
+                self._refresh_accounts()
+
         run_async(_go()).add_done_callback(lambda f: self.after(0, _done, f))
 
     def _stop_worker(self):
         acc_id = self._sel_acc_id()
-        if not acc_id: return
-        _logger.info(f"[GUI] Остановка воркера acc_id={acc_id}")
+        if not acc_id:
+            return
+        if acc_id in self._worker_action_in_progress:
+            _logger.warning(f"[GUI] Stop ignored for acc_id={acc_id}: action already in progress")
+            return
+
+        self._worker_action_in_progress.add(acc_id)
+        self._set_row_loading(acc_id, True)
+        _logger.info(f"[GUI] Stop clicked acc_id={acc_id}")
+
         async def _go():
             from main import worker_manager
             return await worker_manager.stop(acc_id)
+
         def _done(fut):
             try:
                 fut.result()
-                self._refresh_accounts()
-                _logger.info(f"[GUI] Воркер acc_id={acc_id} остановлен")
+                _logger.info(f"[GUI] Worker stopped acc_id={acc_id}")
             except Exception as e:
-                _logger.error(f"[GUI] Ошибка остановки воркера acc_id={acc_id}: {e}")
-                messagebox.showerror("Error", str(e), parent=self)
+                _logger.error(f"[GUI] Stop failed acc_id={acc_id}: {e}\n{traceback.format_exc()}")
+                messagebox.showerror("Stop error", str(e), parent=self)
+            finally:
+                self._worker_action_in_progress.discard(acc_id)
+                self._set_row_loading(acc_id, False)
+                self._refresh_accounts()
+
         run_async(_go()).add_done_callback(lambda f: self.after(0, _done, f))
+
+    def _set_row_loading(self, acc_id: int, loading: bool) -> None:
+        w = self._acc_row_widgets.get(acc_id)
+        if not w:
+            return
+        try:
+            if loading:
+                w["toggle_btn"].config(state="disabled", text="⏳  Working...")
+            else:
+                w["toggle_btn"].config(state="normal")
+        except Exception:
+            pass
 
     def _test_session(self):
         acc_id = self._sel_acc_id()
@@ -873,13 +917,15 @@ class XBotApp(tk.Tk):
         field(1,1,"Auto Start",   "auto_start",   "check")
         field(2,1,"Delay (min) ±5m","min_delay_min")
         field(3,1,"Daily Limit",  "daily_limit")
-        field(4,1,"Comments In Row", "comments_in_row")
-        field(5,1,"Hourly Cap", "hourly_cap")
-        field(6,1,"Burst/30m Cap", "burst_30min_cap")
-        field(7,1,"Simple Filters", "simple_filters", "check")
-        field(8,1,"Like After Reply", "like_after_reply", "check")
-        field(9,1,"Bookmark After Reply", "bookmark_after_reply", "check")
-        field(10,1,"Visit Profile After", "visit_profile_after_reply", "check")
+        field(4,1,"Actions/Cycle", "max_actions_per_cycle")
+        field(5,1,"Pause Actions (sec)", "action_pause_seconds")
+        field(6,1,"Manual Extra Actions", "enable_manual_extra_actions", "check")
+        field(7,1,"Hourly Cap", "hourly_cap")
+        field(8,1,"Burst/30m Cap", "burst_30min_cap")
+        field(9,1,"Simple Filters", "simple_filters", "check")
+        field(10,1,"Like After Reply", "like_after_reply", "check")
+        field(11,1,"Bookmark After Reply", "bookmark_after_reply", "check")
+        field(12,1,"Visit Profile After", "visit_profile_after_reply", "check")
 
         def textarea(r, lbl, hint=""):
             tk.Label(card, text=lbl, font=("Segoe UI",9),
@@ -1051,14 +1097,14 @@ class XBotApp(tk.Tk):
                     return lines, None
 
                 post_url = f"https://x.com/{chosen_tweet.author_username}/status/{chosen_tweet.id}"
-                lines.append((f"\n📌 POST by @{chosen_tweet.author_username} (❤ {chosen_tweet.likes} | 🔁 {chosen_tweet.retweets})", "info"))
+                lines.append((f"📌 POST by @{chosen_tweet.author_username} (❤ {chosen_tweet.likes} | 🔁 {chosen_tweet.retweets})", "info"))
                 lines.append((chosen_tweet.text[:300], ""))
                 lines.append((f"🔗 {post_url}", ""))
-                lines.append((f"\n💬 TOP COMMENT by @{chosen_comment.author_username} (❤ {chosen_comment.likes})", "info"))
+                lines.append((f"💬 TOP COMMENT by @{chosen_comment.author_username} (❤ {chosen_comment.likes})", "info"))
                 lines.append((chosen_comment.text[:200], ""))
 
                 # ── Generate AI reply ──
-                lines.append(("\n🤖 Generating AI reply...", ""))
+                lines.append(("🤖 Generating AI reply...", ""))
                 try:
                     reply_text, prov = await generate_reply(
                         post_text=chosen_tweet.text,
@@ -1066,12 +1112,13 @@ class XBotApp(tk.Tk):
                         provider=ai_provider,
                         system_prompt=system_prompt,
                     )
-                    lines.append((f"\n✅ REPLY [{prov}]:", "ok"))
+                    lines.append((f"✅ REPLY [{prov}]:", "ok"))
                     lines.append((reply_text, "reply"))
                 except Exception as e:
-                    lines.append((f"\n❌ AI error: {e}", "err"))
+                    lines.append((f"❌ AI error: {e}", "err"))
 
-                lines.append(("\n⚠️  Nothing was posted — this is a dry run.", ""))
+                lines.append(("⚠️ Nothing was posted — this is a dry run.", ""))
+                lines.append(("ℹ️ To publish for real: run Start on account (or enable Auto Publish in Settings).", "info"))
                 return lines, None
 
         def _done(fut):
@@ -1263,7 +1310,7 @@ class XBotApp(tk.Tk):
         _btn(bf, "🔧  Проверить Playwright", command=self._check_playwright,
              style="warning").pack(side="left", padx=8)
 
-        tk.Label(card, text="Keys are saved to %APPDATA%/XBot/.env  (created automatically on first launch)",
+        tk.Label(card, text="Keys are saved to active .env (APPDATA for exe build).",
                  font=("Segoe UI", 8), fg=C["muted"],
                  bg=C["surface"]).grid(row=14, column=0, columnspan=2,
                                        sticky="w", padx=16, pady=(0,16))
@@ -1271,8 +1318,8 @@ class XBotApp(tk.Tk):
         # Load on build
         self.after(500, self._load_apikeys)
     def _load_apikeys(self):
-        from config import _ENV_FILE
-        env_path = _ENV_FILE
+        from config import _ENV_IN_USE
+        env_path = _ENV_IN_USE
         if not env_path.exists(): return
         vals = {}
         for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -1293,7 +1340,7 @@ class XBotApp(tk.Tk):
         self._e_tg_admins.insert(0, vals.get("TELEGRAM_ADMIN_IDS", ""))
         self._e_provider.set(vals.get("DEFAULT_AI_PROVIDER", "groq"))
     def _save_apikeys(self):
-        from config import _ENV_FILE, save_env_value, reload_settings
+        from config import _ENV_IN_USE, save_env_value, reload_settings
         from ai import reset_ai_clients
         # Normalize admin IDs: strip brackets/spaces
         admin_raw = self._e_tg_admins.get().strip()
