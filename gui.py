@@ -3,9 +3,12 @@ gui.py — X AutoReply Bot Desktop Panel  (light theme)
 Launch: python main.py
 """
 from __future__ import annotations
+from config import logger as _logger
+import collections
 
 import asyncio
 import threading
+import traceback
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from typing import Optional
@@ -13,9 +16,11 @@ from typing import Optional
 # ── Async bridge ───────────────────────────────────────────────────────────────
 _loop = asyncio.new_event_loop()
 
+
 def _run_asyncio_loop_forever(loop: asyncio.AbstractEventLoop) -> None:
     asyncio.set_event_loop(loop)
     loop.run_forever()
+
 
 threading.Thread(
     target=_run_asyncio_loop_forever,
@@ -25,18 +30,19 @@ threading.Thread(
 ).start()
 
 # ── Live log buffer (thread-safe ring buffer) ──────────────────────────────────
-import collections
 _live_log_buffer: collections.deque = collections.deque(maxlen=500)
 _live_log_callbacks: list = []
 
+
 class _LiveLogSink:
     """Loguru sink — receives Message objects with .record attached."""
+
     def write(self, message):
         record = message.record
         level = record["level"].name
-        t     = record["time"].strftime("%H:%M:%S")
-        msg   = record["message"]
-        name  = record["name"]
+        t = record["time"].strftime("%H:%M:%S")
+        msg = record["message"]
+        name = record["name"]
         color = {
             "SUCCESS": "#22c55e",
             "INFO":    "#60a5fa",
@@ -47,23 +53,28 @@ class _LiveLogSink:
         entry = (t, level, name, msg, color)
         _live_log_buffer.append(entry)
         for cb in list(_live_log_callbacks):
-            try: cb(entry)
-            except Exception: pass
+            try:
+                cb(entry)
+            except Exception:
+                pass
 
     def __call__(self, message):
         self.write(message)
 
+
 _live_log_sink = _LiveLogSink()
 
 # Register our sink into loguru
-from config import logger as _logger
 _logger.add(_live_log_sink, format="{message}", level="DEBUG", enqueue=True)
+
 
 def run_async(coro):
     return asyncio.run_coroutine_threadsafe(coro, _loop)
 
+
 def run_sync(coro):
     return run_async(coro).result(timeout=15)
+
 
 # ── Palette (light) ────────────────────────────────────────────────────────────
 C = {
@@ -87,6 +98,7 @@ C = {
 
 # ── Base widgets ───────────────────────────────────────────────────────────────
 
+
 def _entry(parent, show="", width=0, **kw):
     """Proper Entry widget with working paste."""
     e = tk.Entry(parent,
@@ -98,14 +110,17 @@ def _entry(parent, show="", width=0, **kw):
                  highlightcolor=C["accent"],
                  highlightbackground=C["border"],
                  show=show, **kw)
-    if width: e.config(width=width)
+    if width:
+        e.config(width=width)
     return e
+
 
 def _label(parent, text, size=10, bold=False, color=None, bg=None, **kw):
     return tk.Label(parent, text=text,
                     font=("Segoe UI", size, "bold" if bold else "normal"),
                     fg=color or C["text"],
                     bg=bg or C["surface"], **kw)
+
 
 def _btn(parent, text, command=None, style="primary", width=None):
     styles = {
@@ -122,21 +137,24 @@ def _btn(parent, text, command=None, style="primary", width=None):
               activebackground=bg, activeforeground=fg,
               relief="flat", bd=0, cursor="hand2",
               padx=14, pady=6)
-    if width: kw["width"] = width
+    if width:
+        kw["width"] = width
     b = tk.Button(parent, **kw)
     b.bind("<Enter>", lambda e: b.config(bg=_dim(bg, 20)))
     b.bind("<Leave>", lambda e: b.config(bg=bg))
     return b
 
+
 def _dim(h, amt=20):
-    r,g,b = int(h[1:3],16), int(h[3:5],16), int(h[5:7],16)
-    return f"#{max(0,r-amt):02x}{max(0,g-amt):02x}{max(0,b-amt):02x}"
+    r, g, b = int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
+    return f"#{max(0, r-amt):02x}{max(0, g-amt):02x}{max(0, b-amt):02x}"
+
 
 def _sep(parent, orient="h"):
     f = tk.Frame(parent,
                  bg=C["border"],
-                 height=1 if orient=="h" else 0,
-                 width=0 if orient=="h" else 1)
+                 height=1 if orient == "h" else 0,
+                 width=0 if orient == "h" else 1)
     return f
 
 
@@ -149,9 +167,12 @@ class XBotApp(tk.Tk):
         self.geometry("1060x700")
         self.minsize(900, 600)
         self.configure(bg=C["bg"])
-        try: run_sync(self._init_db())
-        except Exception: pass
+        try:
+            run_sync(self._init_db())
+        except Exception:
+            pass
         self._tg_running = False
+        self._worker_action_in_progress: set[int] = set()
         self._apply_styles()
         self._build_ui()
         self._refresh_all()
@@ -196,7 +217,7 @@ class XBotApp(tk.Tk):
         _sep(top).pack(side="bottom", fill="x")
 
         tk.Label(top, text="⚡", font=("Segoe UI", 18),
-                 fg=C["accent"], bg=C["surface"]).pack(side="left", padx=(16,4), pady=8)
+                 fg=C["accent"], bg=C["surface"]).pack(side="left", padx=(16, 4), pady=8)
         tk.Label(top, text="X AutoReply Bot",
                  font=("Segoe UI", 13, "bold"),
                  fg=C["text"], bg=C["surface"]).pack(side="left", pady=8)
@@ -219,8 +240,8 @@ class XBotApp(tk.Tk):
         self._tabs:  dict[str, tk.Label] = {}
         # Main area = top pages + bottom live log (resizable paned)
         self._paned = tk.PanedWindow(self, orient="vertical",
-                                      bg=C["bg"], sashwidth=5,
-                                      sashrelief="flat")
+                                     bg=C["bg"], sashwidth=5,
+                                     sashrelief="flat")
         self._paned.pack(fill="both", expand=True)
 
         self._container = tk.Frame(self._paned, bg=C["bg"])
@@ -228,8 +249,8 @@ class XBotApp(tk.Tk):
 
         # ── Live Console panel ──────────────────────────────────────────────
         self._console_frame = tk.Frame(self._paned, bg=C["surface"],
-                                        highlightthickness=1,
-                                        highlightbackground=C["border"])
+                                       highlightthickness=1,
+                                       highlightbackground=C["border"])
         self._paned.add(self._console_frame, minsize=80)
 
         console_hdr = tk.Frame(self._console_frame, bg=C["accent"], height=28)
@@ -357,7 +378,8 @@ class XBotApp(tk.Tk):
         self._console_txt.config(state="disabled")
 
     def _show_tab(self, name):
-        for pg in self._pages.values(): pg.pack_forget()
+        for pg in self._pages.values():
+            pg.pack_forget()
         self._pages[name].pack(fill="both", expand=True)
         for n, t in self._tabs.items():
             if n == name:
@@ -380,7 +402,7 @@ class XBotApp(tk.Tk):
 
     def _toolbar(self, parent, title, row=0):
         bar = tk.Frame(parent, bg=C["bg"])
-        bar.grid(row=row, column=0, sticky="ew", padx=16, pady=(14,4))
+        bar.grid(row=row, column=0, sticky="ew", padx=16, pady=(14, 4))
         _label(bar, title, size=13, bold=True, bg=C["bg"]).pack(side="left")
         return bar
 
@@ -394,7 +416,8 @@ class XBotApp(tk.Tk):
         t = ttk.Treeview(f, columns=cols, show="headings")
         for cid, lbl, w in cols_spec:
             t.heading(cid, text=lbl)
-            t.column(cid, width=w, anchor="center" if w < 250 else "w", minwidth=40)
+            t.column(cid, width=w, anchor="center" if w <
+                     250 else "w", minwidth=40)
         sb = ttk.Scrollbar(f, orient="vertical", command=t.yview)
         t.configure(yscrollcommand=sb.set)
         t.grid(row=0, column=0, sticky="nsew")
@@ -419,21 +442,25 @@ class XBotApp(tk.Tk):
         outer.rowconfigure(0, weight=1)
 
         canvas = tk.Canvas(outer, bg=C["surface"], highlightthickness=0)
-        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        scrollbar = ttk.Scrollbar(
+            outer, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
         self._acc_list_frame = tk.Frame(canvas, bg=C["surface"])
-        self._acc_canvas_window = canvas.create_window((0, 0), window=self._acc_list_frame, anchor="nw")
+        self._acc_canvas_window = canvas.create_window(
+            (0, 0), window=self._acc_list_frame, anchor="nw")
 
         def _on_frame_configure(e):
             canvas.configure(scrollregion=canvas.bbox("all"))
+
         def _on_canvas_configure(e):
             canvas.itemconfig(self._acc_canvas_window, width=e.width)
         self._acc_list_frame.bind("<Configure>", _on_frame_configure)
         canvas.bind("<Configure>", _on_canvas_configure)
-        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-1*(e.delta//120), "units"))
+        canvas.bind("<MouseWheel>",
+                    lambda e: canvas.yview_scroll(-1*(e.delta//120), "units"))
 
         self._acc_row_widgets = {}  # acc_id -> {frame, toggle_btn, status_lbl, today_lbl}
         self._selected_acc_id = None
@@ -447,7 +474,8 @@ class XBotApp(tk.Tk):
 
     def _sel_acc_id(self):
         if not self._selected_acc_id:
-            messagebox.showwarning("Select", "Select an account first", parent=self)
+            messagebox.showwarning(
+                "Select", "Select an account first", parent=self)
             return None
         return self._selected_acc_id
 
@@ -457,7 +485,8 @@ class XBotApp(tk.Tk):
             try:
                 from main import worker_manager
                 running = set(worker_manager.running_accounts())
-            except Exception: running = set()
+            except Exception:
+                running = set()
             accs = await get_accounts(active_only=False)
             rows = []
             for a in accs:
@@ -484,10 +513,10 @@ class XBotApp(tk.Tk):
                     del self._acc_row_widgets[aid]
 
             for i, row in enumerate(rows):
-                acc_id   = row["id"]
+                acc_id = row["id"]
                 username = row["username"]
-                today    = row["today"]
-                running  = row["running"]
+                today = row["today"]
+                running = row["running"]
 
                 if acc_id in self._acc_row_widgets:
                     # Just update dynamic labels + button
@@ -496,9 +525,12 @@ class XBotApp(tk.Tk):
                     w["status_lbl"].config(
                         text="🟢 Running" if running else "⚪ Stopped",
                         fg=C["green"] if running else C["muted"])
+                    is_busy = acc_id in self._worker_action_in_progress
                     w["toggle_btn"].config(
-                        text="⏹  Stop" if running else "▶  Start",
-                        bg=C["yellow"] if running else C["green"])
+                        text="⏳  Working..." if is_busy else (
+                            "⏹  Stop" if running else "▶  Start"),
+                        bg=C["yellow"] if running else C["green"],
+                        state="disabled" if is_busy else "normal")
                 else:
                     # Build new row card
                     bg = C["surface"] if i % 2 == 0 else C["row_alt"]
@@ -512,7 +544,8 @@ class XBotApp(tk.Tk):
                         def _sel(e=None):
                             self._selected_acc_id = aid
                             for w2 in self._acc_row_widgets.values():
-                                w2["frame"].config(highlightbackground=C["border"])
+                                w2["frame"].config(
+                                    highlightbackground=C["border"])
                             f.config(highlightbackground=C["accent"])
                             # auto-fill settings tab
                             if hasattr(self, "_sett_id"):
@@ -561,8 +594,10 @@ class XBotApp(tk.Tk):
                         def _toggle():
                             self._selected_acc_id = aid
                             w = self._acc_row_widgets.get(aid)
-                            if not w: return
-                            is_running = w["status_lbl"].cget("text").startswith("🟢")
+                            if not w:
+                                return
+                            is_running = w["status_lbl"].cget(
+                                "text").startswith("🟢")
                             if is_running:
                                 self._stop_worker()
                             else:
@@ -610,18 +645,20 @@ class XBotApp(tk.Tk):
         body = tk.Frame(win, bg=C["bg"])
         body.pack(fill="both", expand=True, padx=24, pady=16)
 
-        _label(body, "Get cookies from:", size=9, color=C["muted"], bg=C["bg"]).pack(anchor="w")
+        _label(body, "Get cookies from:", size=9,
+               color=C["muted"], bg=C["bg"]).pack(anchor="w")
         _label(body, "Chrome → F12 → Application → Cookies → x.com",
-               size=9, bold=True, color=C["accent"], bg=C["bg"]).pack(anchor="w", pady=(0,12))
+               size=9, bold=True, color=C["accent"], bg=C["bg"]).pack(anchor="w", pady=(0, 12))
 
         def field(lbl, show=""):
-            _label(body, lbl, size=9, color=C["muted"], bg=C["bg"]).pack(anchor="w")
+            _label(body, lbl, size=9, color=C["muted"], bg=C["bg"]).pack(
+                anchor="w")
             e = _entry(body, show=show)
-            e.pack(fill="x", pady=(2,10), ipady=5)
+            e.pack(fill="x", pady=(2, 10), ipady=5)
             return e
 
         e_auth = field("auth_token", show="•")
-        e_ct0  = field("ct0",        show="•")
+        e_ct0 = field("ct0",        show="•")
 
         # Status
         sv = tk.StringVar()
@@ -629,13 +666,14 @@ class XBotApp(tk.Tk):
                  fg=C["red"], bg=C["bg"]).pack(anchor="w")
 
         btn_frame = tk.Frame(body, bg=C["bg"])
-        btn_frame.pack(fill="x", pady=(8,0))
+        btn_frame.pack(fill="x", pady=(8, 0))
 
         def do_add():
             auth = e_auth.get().strip()
-            ct0  = e_ct0.get().strip()
+            ct0 = e_ct0.get().strip()
             if not auth or not ct0:
-                sv.set("⚠  Fill both fields"); return
+                sv.set("⚠  Fill both fields")
+                return
             sv.set("⏳  Verifying session...")
             win.update()
 
@@ -647,7 +685,8 @@ class XBotApp(tk.Tk):
                 async with TwitterClient(0, ae, ce) as c:
                     uname = await c.verify_session()
                 if not uname:
-                    _logger.warning("[GUI] Добавление аккаунта: сессия недействительна")
+                    _logger.warning(
+                        "[GUI] Добавление аккаунта: сессия недействительна")
                     return None
                 aid = await add_account(uname, ae, ce)
                 for k, v in [
@@ -667,11 +706,14 @@ class XBotApp(tk.Tk):
                     ("simple_filters", BotDefaults.simple_filters),
                     ("like_after_reply", BotDefaults.like_after_reply),
                     ("bookmark_after_reply", BotDefaults.bookmark_after_reply),
-                    ("visit_profile_after_reply", BotDefaults.visit_profile_after_reply),
+                    ("visit_profile_after_reply",
+                     BotDefaults.visit_profile_after_reply),
                     ("system_prompt", BotDefaults.system_prompt),
                     ("auto_start", False),
-                ]: await set_setting(aid, k, v)
-                _logger.success(f"[GUI] ✅ Аккаунт @{uname} добавлен (id={aid})")
+                ]:
+                    await set_setting(aid, k, v)
+                _logger.success(
+                    f"[GUI] ✅ Аккаунт @{uname} добавлен (id={aid})")
                 return uname
 
             def _done(fut):
@@ -680,113 +722,183 @@ class XBotApp(tk.Tk):
                     if uname:
                         win.destroy()
                         self._refresh_accounts()
-                        messagebox.showinfo("Success", f"✅  @{uname} added!", parent=self)
+                        messagebox.showinfo(
+                            "Success", f"✅  @{uname} added!", parent=self)
                     else:
                         sv.set("❌  Session invalid — check cookies")
                 except Exception as ex:
                     _logger.error(f"[GUI] Ошибка добавления аккаунта: {ex}")
                     sv.set(f"❌  {ex}")
-            run_async(_add()).add_done_callback(lambda f: self.after(0, _done, f))
+            run_async(_add()).add_done_callback(
+                lambda f: self.after(0, _done, f))
 
-        _btn(btn_frame, "Add Account", command=do_add, style="success").pack(side="left")
-        _btn(btn_frame, "Cancel", command=win.destroy, style="ghost").pack(side="left", padx=8)
+        _btn(btn_frame, "Add Account", command=do_add,
+             style="success").pack(side="left")
+        _btn(btn_frame, "Cancel", command=win.destroy,
+             style="ghost").pack(side="left", padx=8)
 
     def _start_worker(self):
         acc_id = self._sel_acc_id()
-        if not acc_id: return
-        _logger.info(f"[GUI] Запуск воркера acc_id={acc_id}")
+        if not acc_id:
+            return
+        if acc_id in self._worker_action_in_progress:
+            _logger.warning(
+                f"[GUI] Start ignored for acc_id={acc_id}: action already in progress")
+            return
+
+        self._worker_action_in_progress.add(acc_id)
+        self._set_row_loading(acc_id, True)
+        _logger.info(f"[GUI] Start clicked acc_id={acc_id}")
+
         async def _go():
-            from main import worker_manager
+            from main import get_startup_diagnostics, worker_manager
+            diag = get_startup_diagnostics()
+            _logger.info(f"[GUI] Startup diagnostics: {diag}")
             return await worker_manager.start(acc_id)
+
         def _done(fut):
             try:
                 ok = fut.result()
-                self._refresh_accounts()
                 if ok:
-                    _logger.success(f"[GUI] ✅ Воркер acc_id={acc_id} запущен")
+                    _logger.success(f"[GUI] ✅ Worker started acc_id={acc_id}")
                 else:
-                    _logger.info(f"[GUI] Воркер acc_id={acc_id} уже запущен")
-                    messagebox.showinfo("Info", f"Worker {acc_id} already running", parent=self)
+                    _logger.info(
+                        f"[GUI] Worker already running acc_id={acc_id}")
+                    messagebox.showinfo(
+                        "Info", f"Worker {acc_id} already running", parent=self)
             except Exception as e:
-                _logger.error(f"[GUI] Ошибка запуска воркера acc_id={acc_id}: {e}")
-                messagebox.showerror("Error", str(e), parent=self)
+                _logger.error(
+                    f"[GUI] Start failed acc_id={acc_id}: {e}\n{traceback.format_exc()}")
+                messagebox.showerror(
+                    "Start error", f"Не удалось запустить задачу.\n{e}", parent=self)
+            finally:
+                self._worker_action_in_progress.discard(acc_id)
+                self._set_row_loading(acc_id, False)
+                self._refresh_accounts()
+
         run_async(_go()).add_done_callback(lambda f: self.after(0, _done, f))
 
     def _stop_worker(self):
         acc_id = self._sel_acc_id()
-        if not acc_id: return
-        _logger.info(f"[GUI] Остановка воркера acc_id={acc_id}")
+        if not acc_id:
+            return
+        if acc_id in self._worker_action_in_progress:
+            _logger.warning(
+                f"[GUI] Stop ignored for acc_id={acc_id}: action already in progress")
+            return
+
+        self._worker_action_in_progress.add(acc_id)
+        self._set_row_loading(acc_id, True)
+        _logger.info(f"[GUI] Stop clicked acc_id={acc_id}")
+
         async def _go():
             from main import worker_manager
             return await worker_manager.stop(acc_id)
+
         def _done(fut):
             try:
                 fut.result()
-                self._refresh_accounts()
-                _logger.info(f"[GUI] Воркер acc_id={acc_id} остановлен")
+                _logger.info(f"[GUI] Worker stopped acc_id={acc_id}")
             except Exception as e:
-                _logger.error(f"[GUI] Ошибка остановки воркера acc_id={acc_id}: {e}")
-                messagebox.showerror("Error", str(e), parent=self)
+                _logger.error(
+                    f"[GUI] Stop failed acc_id={acc_id}: {e}\n{traceback.format_exc()}")
+                messagebox.showerror("Stop error", str(e), parent=self)
+            finally:
+                self._worker_action_in_progress.discard(acc_id)
+                self._set_row_loading(acc_id, False)
+                self._refresh_accounts()
+
         run_async(_go()).add_done_callback(lambda f: self.after(0, _done, f))
+
+    def _set_row_loading(self, acc_id: int, loading: bool) -> None:
+        w = self._acc_row_widgets.get(acc_id)
+        if not w:
+            return
+        try:
+            if loading:
+                w["toggle_btn"].config(state="disabled", text="⏳  Working...")
+            else:
+                w["toggle_btn"].config(state="normal")
+        except Exception:
+            pass
 
     def _test_session(self):
         acc_id = self._sel_acc_id()
-        if not acc_id: return
+        if not acc_id:
+            return
         _logger.info(f"[GUI] Проверка сессии acc_id={acc_id}")
+
         async def _go():
             from db import get_account
             from twitter import TwitterClient
             acc = await get_account(acc_id)
-            if not acc: return None
+            if not acc:
+                return None
             async with TwitterClient(acc_id, acc["auth_token"], acc["ct0"]) as c:
                 return await c.verify_session()
+
         def _done(fut):
             try:
                 uname = fut.result()
                 if uname:
-                    _logger.success(f"[GUI] ✅ Сессия acc_id={acc_id} валидна — @{uname}")
-                    messagebox.showinfo("Valid", f"✅  Session OK — @{uname}", parent=self)
+                    _logger.success(
+                        f"[GUI] ✅ Сессия acc_id={acc_id} валидна — @{uname}")
+                    messagebox.showinfo(
+                        "Valid", f"✅  Session OK — @{uname}", parent=self)
                 else:
-                    _logger.warning(f"[GUI] ❌ Сессия acc_id={acc_id} недействительна")
-                    messagebox.showerror("Invalid", "❌  Session invalid — re-add account", parent=self)
+                    _logger.warning(
+                        f"[GUI] ❌ Сессия acc_id={acc_id} недействительна")
+                    messagebox.showerror(
+                        "Invalid", "❌  Session invalid — re-add account", parent=self)
             except Exception as e:
-                _logger.error(f"[GUI] Ошибка проверки сессии acc_id={acc_id}: {e}")
+                _logger.error(
+                    f"[GUI] Ошибка проверки сессии acc_id={acc_id}: {e}")
                 messagebox.showerror("Error", str(e), parent=self)
         run_async(_go()).add_done_callback(lambda f: self.after(0, _done, f))
 
     def _reset_daily(self):
         acc_id = self._sel_acc_id()
-        if not acc_id: return
-        if not messagebox.askyesno("Confirm", f"Reset daily counter for account {acc_id}?", parent=self): return
+        if not acc_id:
+            return
+        if not messagebox.askyesno("Confirm", f"Reset daily counter for account {acc_id}?", parent=self):
+            return
+
         async def _go():
             from datetime import datetime, timezone
             from db import execute
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             await execute("DELETE FROM daily_stats WHERE account_id=? AND date=?", (acc_id, today))
+
         def _done(fut):
             try:
                 fut.result()
                 self._refresh_accounts()
                 _logger.info(f"[GUI] Сброс дневного счётчика acc_id={acc_id}")
             except Exception as e:
-                _logger.error(f"[GUI] Ошибка сброса счётчика acc_id={acc_id}: {e}")
+                _logger.error(
+                    f"[GUI] Ошибка сброса счётчика acc_id={acc_id}: {e}")
                 messagebox.showerror("Error", str(e), parent=self)
         run_async(_go()).add_done_callback(lambda f: self.after(0, _done, f))
 
     def _delete_account(self):
         acc_id = self._sel_acc_id()
-        if not acc_id: return
-        if not messagebox.askyesno("Confirm", f"Delete account {acc_id}?\nThis cannot be undone.", parent=self): return
+        if not acc_id:
+            return
+        if not messagebox.askyesno("Confirm", f"Delete account {acc_id}?\nThis cannot be undone.", parent=self):
+            return
+
         async def _go():
             from db import delete_account
             await delete_account(acc_id)
+
         def _done(fut):
             try:
                 fut.result()
                 self._refresh_accounts()
                 _logger.warning(f"[GUI] 🗑 Аккаунт acc_id={acc_id} удалён")
             except Exception as e:
-                _logger.error(f"[GUI] Ошибка удаления аккаунта acc_id={acc_id}: {e}")
+                _logger.error(
+                    f"[GUI] Ошибка удаления аккаунта acc_id={acc_id}: {e}")
                 messagebox.showerror("Error", str(e), parent=self)
         run_async(_go()).add_done_callback(lambda f: self.after(0, _done, f))
 
@@ -820,16 +932,20 @@ class XBotApp(tk.Tk):
         pg.rowconfigure(1, weight=1)
 
         bar = self._toolbar(pg, "Account Settings")
-        _btn(bar, "💾  Save", command=self._save_settings, style="success").pack(side="right", padx=4)
-        _btn(bar, "📂  Load", command=self._load_settings, style="primary").pack(side="right", padx=4)
-        _btn(bar, "🧪  Test Run", command=self._test_run, style="warning").pack(side="right", padx=4)
-        _label(bar, "Account ID:", size=9, color=C["muted"], bg=C["bg"]).pack(side="right", padx=(12,4))
+        _btn(bar, "💾  Save", command=self._save_settings,
+             style="success").pack(side="right", padx=4)
+        _btn(bar, "📂  Load", command=self._load_settings,
+             style="primary").pack(side="right", padx=4)
+        _btn(bar, "🧪  Test Run", command=self._test_run,
+             style="warning").pack(side="right", padx=4)
+        _label(bar, "Account ID:", size=9, color=C["muted"], bg=C["bg"]).pack(
+            side="right", padx=(12, 4))
         self._sett_id = _entry(bar, width=5)
-        self._sett_id.pack(side="right", padx=(0,4), ipady=3)
+        self._sett_id.pack(side="right", padx=(0, 4), ipady=3)
         self._sett_loaded_lbl = tk.Label(bar, text="← click account to load",
-                                          font=("Segoe UI", 8, "italic"),
-                                          fg=C["muted"], bg=C["bg"])
-        self._sett_loaded_lbl.pack(side="left", padx=(8,0))
+                                         font=("Segoe UI", 8, "italic"),
+                                         fg=C["muted"], bg=C["bg"])
+        self._sett_loaded_lbl.pack(side="left", padx=(8, 0))
 
         card = self._card(pg, row=1)
         card.columnconfigure(1, weight=1)
@@ -841,56 +957,64 @@ class XBotApp(tk.Tk):
             tk.Label(card, text=lbl, font=("Segoe UI", 9),
                      fg=C["muted"], bg=C["surface"],
                      anchor="e").grid(row=r, column=c*2, sticky="e",
-                                      padx=(16,6), pady=6)
+                                      padx=(16, 6), pady=6)
             if wtype == "combo":
                 v = tk.StringVar()
                 w = ttk.Combobox(card, textvariable=v, values=opts,
                                  state="readonly", width=18,
                                  font=("Segoe UI", 9))
-                w.grid(row=r, column=c*2+1, sticky="w", padx=(0,20), pady=6)
+                w.grid(row=r, column=c*2+1, sticky="w", padx=(0, 20), pady=6)
             elif wtype == "check":
                 v = tk.BooleanVar()
                 w = tk.Checkbutton(card, variable=v, bg=C["surface"],
                                    fg=C["text"], selectcolor=C["surface"],
                                    activebackground=C["surface"],
                                    cursor="hand2")
-                w.grid(row=r, column=c*2+1, sticky="w", padx=(0,20), pady=6)
+                w.grid(row=r, column=c*2+1, sticky="w", padx=(0, 20), pady=6)
             else:
                 v = tk.StringVar()
                 w = _entry(card, width=18)
                 w.config(textvariable=v)
-                w.grid(row=r, column=c*2+1, sticky="ew", padx=(0,20), pady=6)
+                w.grid(row=r, column=c*2+1, sticky="ew", padx=(0, 20), pady=6)
             self._sv[key] = v
 
-        field(0,0,"Search Mode",  "search_mode", "combo", ["keywords","list","recommendations"])
-        field(1,0,"Min Likes",    "min_likes")
-        field(2,0,"Min Retweets", "min_retweets")
-        field(3,0,"Max Age (min)","max_age_min")
-        field(4,0,"Comment Sort", "comment_sort", "combo", ["likes","views"])
-        field(5,0,"Reply Mode",   "reply_mode",   "combo", ["hybrid","post_only"])
-        field(6,0,"AI Provider",  "ai_provider",  "combo", ["openai","gemini","perplexity","groq"])
-        field(0,1,"Auto Publish", "auto_publish", "check")
-        field(1,1,"Auto Start",   "auto_start",   "check")
-        field(2,1,"Delay (min) ±5m","min_delay_min")
-        field(3,1,"Daily Limit",  "daily_limit")
-        field(4,1,"Comments In Row", "comments_in_row")
-        field(5,1,"Hourly Cap", "hourly_cap")
-        field(6,1,"Burst/30m Cap", "burst_30min_cap")
-        field(7,1,"Simple Filters", "simple_filters", "check")
-        field(8,1,"Like After Reply", "like_after_reply", "check")
-        field(9,1,"Bookmark After Reply", "bookmark_after_reply", "check")
-        field(10,1,"Visit Profile After", "visit_profile_after_reply", "check")
+        field(0, 0, "Search Mode",  "search_mode", "combo",
+              ["keywords", "list", "recommendations"])
+        field(1, 0, "Min Likes",    "min_likes")
+        field(2, 0, "Min Retweets", "min_retweets")
+        field(3, 0, "Max Age (min)", "max_age_min")
+        field(4, 0, "Comment Sort", "comment_sort",
+              "combo", ["likes", "views"])
+        field(5, 0, "Reply Mode",   "reply_mode",
+              "combo", ["hybrid", "post_only"])
+        field(6, 0, "AI Provider",  "ai_provider",  "combo",
+              ["openai", "gemini", "perplexity", "groq"])
+        field(0, 1, "Auto Publish", "auto_publish", "check")
+        field(1, 1, "Auto Start",   "auto_start",   "check")
+        field(2, 1, "Delay (min) ±5m", "min_delay_min")
+        field(3, 1, "Daily Limit",  "daily_limit")
+        field(4, 1, "Actions/Cycle", "max_actions_per_cycle")
+        field(5, 1, "Pause Actions (sec)", "action_pause_seconds")
+        field(6, 1, "Manual Extra Actions",
+              "enable_manual_extra_actions", "check")
+        field(7, 1, "Hourly Cap", "hourly_cap")
+        field(8, 1, "Burst/30m Cap", "burst_30min_cap")
+        field(9, 1, "Simple Filters", "simple_filters", "check")
+        field(10, 1, "Like After Reply", "like_after_reply", "check")
+        field(11, 1, "Bookmark After Reply", "bookmark_after_reply", "check")
+        field(12, 1, "Visit Profile After",
+              "visit_profile_after_reply", "check")
 
         def textarea(r, lbl, hint=""):
-            tk.Label(card, text=lbl, font=("Segoe UI",9),
+            tk.Label(card, text=lbl, font=("Segoe UI", 9),
                      fg=C["muted"], bg=C["surface"],
                      anchor="ne").grid(row=r, column=0, sticky="ne",
-                                       padx=(16,6), pady=6)
+                                       padx=(16, 6), pady=6)
             if hint:
-                tk.Label(card, text=hint, font=("Segoe UI",8),
+                tk.Label(card, text=hint, font=("Segoe UI", 8),
                          fg=C["muted"], bg=C["surface"]).grid(
-                    row=r+1, column=1, columnspan=3, sticky="w", padx=(0,16))
-            t = tk.Text(card, height=4, font=("Segoe UI",9),
+                    row=r+1, column=1, columnspan=3, sticky="w", padx=(0, 16))
+            t = tk.Text(card, height=4, font=("Segoe UI", 9),
                         fg=C["text"], bg=C["bg"],
                         insertbackground=C["text"],
                         relief="solid", bd=1,
@@ -898,19 +1022,20 @@ class XBotApp(tk.Tk):
                         highlightcolor=C["accent"],
                         highlightbackground=C["border"])
             t.grid(row=r, column=1, columnspan=3,
-                   sticky="ew", padx=(0,16), pady=6)
+                   sticky="ew", padx=(0, 16), pady=6)
             return t
 
         self._prompt_txt = textarea(11, "System Prompt")
-        self._kw_txt     = textarea(12, "Keywords",  "one per line")
-        self._list_txt   = textarea(13, "X Lists",   "one URL per line")
+        self._kw_txt = textarea(12, "Keywords",  "one per line")
+        self._list_txt = textarea(13, "X Lists",   "one URL per line")
 
     def _test_run(self):
         """Run one full search+generate cycle without posting. Shows result in a popup."""
         try:
             acc_id = int(self._sett_id.get())
         except ValueError:
-            messagebox.showwarning("Input", "Load an account first (enter ID and click Load)", parent=self)
+            messagebox.showwarning(
+                "Input", "Load an account first (enter ID and click Load)", parent=self)
             return
 
         # Progress window
@@ -957,9 +1082,11 @@ class XBotApp(tk.Tk):
         txt.tag_config("ok",    foreground=C["green"])
         txt.tag_config("err",   foreground=C["red"])
         txt.tag_config("info",  foreground=C["accent"])
-        txt.tag_config("reply", foreground=C["yellow"], font=("Segoe UI", 9, "bold"))
+        txt.tag_config("reply", foreground=C["yellow"], font=(
+            "Segoe UI", 9, "bold"))
 
-        _btn(body, "Close", command=win.destroy, style="ghost").pack(pady=(8, 0))
+        _btn(body, "Close", command=win.destroy,
+             style="ghost").pack(pady=(8, 0))
 
         async def _run():
             import random
@@ -973,14 +1100,18 @@ class XBotApp(tk.Tk):
             if not acc:
                 return None, "Account not found"
 
-            settings  = await get_all_settings(acc_id)
-            mode      = settings.get("search_mode",  BotDefaults.search_mode)
-            min_likes = int(settings.get("min_likes",    BotDefaults.min_likes) or BotDefaults.min_likes)
-            min_rt    = int(settings.get("min_retweets", BotDefaults.min_retweets) or BotDefaults.min_retweets)
-            max_age   = int(settings.get("max_age_min",  BotDefaults.max_post_age_minutes) or BotDefaults.max_post_age_minutes)
-            sort_by   = settings.get("comment_sort", BotDefaults.comment_sort)
-            ai_provider   = settings.get("ai_provider", None)
-            system_prompt = settings.get("system_prompt", BotDefaults.system_prompt)
+            settings = await get_all_settings(acc_id)
+            mode = settings.get("search_mode",  BotDefaults.search_mode)
+            min_likes = int(settings.get(
+                "min_likes",    BotDefaults.min_likes) or BotDefaults.min_likes)
+            min_rt = int(settings.get("min_retweets",
+                         BotDefaults.min_retweets) or BotDefaults.min_retweets)
+            max_age = int(settings.get(
+                "max_age_min",  BotDefaults.max_post_age_minutes) or BotDefaults.max_post_age_minutes)
+            sort_by = settings.get("comment_sort", BotDefaults.comment_sort)
+            ai_provider = settings.get("ai_provider", None)
+            system_prompt = settings.get(
+                "system_prompt", BotDefaults.system_prompt)
 
             proxy = await proxy_manager.get_proxy_for_account(acc.get("proxy_id"))
 
@@ -995,20 +1126,23 @@ class XBotApp(tk.Tk):
                     return None, "Session invalid"
 
                 lines = [("✅ Session OK — @" + username, "ok")]
-                lines.append((f"⚙️  mode={mode}  min_likes={min_likes}  max_age={max_age}min  AI={ai_provider}", ""))
+                lines.append(
+                    (f"⚙️  mode={mode}  min_likes={min_likes}  max_age={max_age}min  AI={ai_provider}", ""))
 
                 # ── Fetch tweets (with fallback to recommendations) ──
                 tweets = []
                 if mode == "keywords":
                     keywords = await get_keywords(acc_id)
                     if keywords:
-                        lines.append((f"🔍 Searching keywords: {keywords[:3]}", ""))
+                        lines.append(
+                            (f"🔍 Searching keywords: {keywords[:3]}", ""))
                         for kw in keywords[:3]:
                             res = await client.search_tweets(kw, min_likes=min_likes,
-                                                              min_retweets=min_rt, max_age_minutes=max_age, limit=10)
+                                                             min_retweets=min_rt, max_age_minutes=max_age, limit=10)
                             tweets.extend(res)
                     if not tweets:
-                        lines.append(("⚠️ Keyword search returned 0 — trying recommendations...", "err"))
+                        lines.append(
+                            ("⚠️ Keyword search returned 0 — trying recommendations...", "err"))
                         tweets = await client.get_recommended_tweets(min_likes=0, limit=20)
 
                 elif mode == "list":
@@ -1016,49 +1150,56 @@ class XBotApp(tk.Tk):
                     if urls:
                         for url in urls[:3]:
                             res = await client.get_list_tweets(url, min_likes=min_likes,
-                                                                min_retweets=min_rt, max_age_minutes=max_age, limit=10)
+                                                               min_retweets=min_rt, max_age_minutes=max_age, limit=10)
                             tweets.extend(res)
                     if not tweets:
-                        lines.append(("⚠️ List returned 0 — trying recommendations...", "err"))
+                        lines.append(
+                            ("⚠️ List returned 0 — trying recommendations...", "err"))
                         tweets = await client.get_recommended_tweets(min_likes=0, limit=20)
 
                 else:  # recommendations
                     # Try with user's min_likes first, then fall back to 0 if empty
                     tweets = await client.get_recommended_tweets(min_likes=min_likes, limit=20)
                     if not tweets and min_likes > 0:
-                        lines.append((f"⚠️ No tweets with min_likes={min_likes} — retrying with min_likes=0...", "err"))
+                        lines.append(
+                            (f"⚠️ No tweets with min_likes={min_likes} — retrying with min_likes=0...", "err"))
                         tweets = await client.get_recommended_tweets(min_likes=0, limit=20)
 
                 if not tweets:
-                    lines.append(("❌ No tweets found via any method. Check your session or network.", "err"))
+                    lines.append(
+                        ("❌ No tweets found via any method. Check your session or network.", "err"))
                     return lines, None
 
-                lines.append((f"✅ Found {len(tweets)} tweets (mode: {mode})", "ok"))
+                lines.append(
+                    (f"✅ Found {len(tweets)} tweets (mode: {mode})", "ok"))
 
                 # ── Pick best tweet (most likes with a comment) ──
                 tweets.sort(key=lambda t: t.likes, reverse=True)
-                chosen_tweet   = None
+                chosen_tweet = None
                 chosen_comment = None
                 for t in tweets[:10]:
                     c = await client.get_top_comment(t, sort_by=sort_by)
                     if c:
-                        chosen_tweet   = t
+                        chosen_tweet = t
                         chosen_comment = c
                         break
 
                 if not chosen_tweet:
-                    lines.append(("⚠️ Found tweets but none had comments. Bot will try again next cycle.", "err"))
+                    lines.append(
+                        ("⚠️ Found tweets but none had comments. Bot will try again next cycle.", "err"))
                     return lines, None
 
                 post_url = f"https://x.com/{chosen_tweet.author_username}/status/{chosen_tweet.id}"
-                lines.append((f"\n📌 POST by @{chosen_tweet.author_username} (❤ {chosen_tweet.likes} | 🔁 {chosen_tweet.retweets})", "info"))
+                lines.append(
+                    (f"📌 POST by @{chosen_tweet.author_username} (❤ {chosen_tweet.likes} | 🔁 {chosen_tweet.retweets})", "info"))
                 lines.append((chosen_tweet.text[:300], ""))
                 lines.append((f"🔗 {post_url}", ""))
-                lines.append((f"\n💬 TOP COMMENT by @{chosen_comment.author_username} (❤ {chosen_comment.likes})", "info"))
+                lines.append(
+                    (f"💬 TOP COMMENT by @{chosen_comment.author_username} (❤ {chosen_comment.likes})", "info"))
                 lines.append((chosen_comment.text[:200], ""))
 
                 # ── Generate AI reply ──
-                lines.append(("\n🤖 Generating AI reply...", ""))
+                lines.append(("🤖 Generating AI reply...", ""))
                 try:
                     reply_text, prov = await generate_reply(
                         post_text=chosen_tweet.text,
@@ -1066,12 +1207,15 @@ class XBotApp(tk.Tk):
                         provider=ai_provider,
                         system_prompt=system_prompt,
                     )
-                    lines.append((f"\n✅ REPLY [{prov}]:", "ok"))
+                    lines.append((f"✅ REPLY [{prov}]:", "ok"))
                     lines.append((reply_text, "reply"))
                 except Exception as e:
-                    lines.append((f"\n❌ AI error: {e}", "err"))
+                    lines.append((f"❌ AI error: {e}", "err"))
 
-                lines.append(("\n⚠️  Nothing was posted — this is a dry run.", ""))
+                lines.append(
+                    ("⚠️ Nothing was posted — this is a dry run.", ""))
+                lines.append(
+                    ("ℹ️ To publish for real: run Start on account (or enable Auto Publish in Settings).", "info"))
                 return lines, None
 
         def _done(fut):
@@ -1080,12 +1224,16 @@ class XBotApp(tk.Tk):
                     return
                 result, err = fut.result()
                 if err:
-                    try: status_var.set(f"❌ {err}")
-                    except Exception: pass
+                    try:
+                        status_var.set(f"❌ {err}")
+                    except Exception:
+                        pass
                     append(f"Error: {err}", "err")
                 else:
-                    try: status_var.set("✅ Test completed successfully")
-                    except Exception: pass
+                    try:
+                        status_var.set("✅ Test completed successfully")
+                    except Exception:
+                        pass
                     for line, tag in result:
                         append(line, tag)
             except Exception as e:
@@ -1100,12 +1248,17 @@ class XBotApp(tk.Tk):
         run_async(_run()).add_done_callback(lambda f: self.after(0, _done, f))
 
     def _load_settings(self):
-        try: acc_id = int(self._sett_id.get())
+        try:
+            acc_id = int(self._sett_id.get())
         except ValueError:
-            messagebox.showwarning("Input", "Enter a valid account ID", parent=self); return
+            messagebox.showwarning(
+                "Input", "Enter a valid account ID", parent=self)
+            return
+
         async def _load():
             from db import get_all_settings, get_keywords, get_x_lists
             return await get_all_settings(acc_id), await get_keywords(acc_id), await get_x_lists(acc_id)
+
         def _done(fut):
             try:
                 from config import BotDefaults
@@ -1117,24 +1270,32 @@ class XBotApp(tk.Tk):
                         var.set(str(int(raw) // 60))
                         continue
                     val = s.get(key, "")
-                    if isinstance(var, tk.BooleanVar): var.set(bool(val))
-                    else: var.set(str(val) if val != "" else "")
-                self._prompt_txt.delete("1.0","end")
-                self._prompt_txt.insert("end", s.get("system_prompt",""))
-                self._kw_txt.delete("1.0","end")
+                    if isinstance(var, tk.BooleanVar):
+                        var.set(bool(val))
+                    else:
+                        var.set(str(val) if val != "" else "")
+                self._prompt_txt.delete("1.0", "end")
+                self._prompt_txt.insert("end", s.get("system_prompt", ""))
+                self._kw_txt.delete("1.0", "end")
                 self._kw_txt.insert("end", "\n".join(kws))
-                self._list_txt.delete("1.0","end")
+                self._list_txt.delete("1.0", "end")
                 self._list_txt.insert("end", "\n".join(lists))
                 # Switch to Settings tab so user sees the loaded data
                 self._show_tab("Settings")
-                self._sett_loaded_lbl.config(text=f"✓  Loaded account {acc_id}", fg=C["green"])
-            except Exception as e: messagebox.showerror("Error", str(e), parent=self)
+                self._sett_loaded_lbl.config(
+                    text=f"✓  Loaded account {acc_id}", fg=C["green"])
+            except Exception as e:
+                messagebox.showerror("Error", str(e), parent=self)
         run_async(_load()).add_done_callback(lambda f: self.after(0, _done, f))
 
     def _save_settings(self):
-        try: acc_id = int(self._sett_id.get())
+        try:
+            acc_id = int(self._sett_id.get())
         except ValueError:
-            messagebox.showwarning("Input", "Enter a valid account ID", parent=self); return
+            messagebox.showwarning(
+                "Input", "Enter a valid account ID", parent=self)
+            return
+
         async def _save():
             from db import set_keywords, set_setting, set_x_lists
             from config import BotDefaults
@@ -1159,18 +1320,23 @@ class XBotApp(tk.Tk):
                 else:
                     await set_setting(acc_id, key, val)
             await set_setting(acc_id, "system_prompt",
-                              self._prompt_txt.get("1.0","end").strip())
-            kws = [k.strip() for k in self._kw_txt.get("1.0","end").splitlines() if k.strip()]
+                              self._prompt_txt.get("1.0", "end").strip())
+            kws = [k.strip() for k in self._kw_txt.get(
+                "1.0", "end").splitlines() if k.strip()]
             await set_keywords(acc_id, kws)
-            ls = [l.strip() for l in self._list_txt.get("1.0","end").splitlines() if l.strip()]
+            ls = [l.strip() for l in self._list_txt.get(
+                "1.0", "end").splitlines() if l.strip()]
             await set_x_lists(acc_id, ls)
+
         def _done(fut):
             try:
                 fut.result()
-                _logger.success(f"[GUI] ✅ Настройки сохранены для acc_id={acc_id}")
-                messagebox.showinfo("Saved","✅  Settings saved!", parent=self)
+                _logger.success(
+                    f"[GUI] ✅ Настройки сохранены для acc_id={acc_id}")
+                messagebox.showinfo("Saved", "✅  Settings saved!", parent=self)
             except Exception as e:
-                _logger.error(f"[GUI] Ошибка сохранения настроек acc_id={acc_id}: {e}")
+                _logger.error(
+                    f"[GUI] Ошибка сохранения настроек acc_id={acc_id}: {e}")
                 messagebox.showerror("Error", str(e), parent=self)
         run_async(_save()).add_done_callback(lambda f: self.after(0, _done, f))
 
@@ -1200,24 +1366,27 @@ class XBotApp(tk.Tk):
 
         def _on_frame(e):
             canvas.configure(scrollregion=canvas.bbox("all"))
+
         def _on_canvas(e):
             canvas.itemconfig(_win, width=e.width)
         card.bind("<Configure>", _on_frame)
         canvas.bind("<Configure>", _on_canvas)
-        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-1*(e.delta//120), "units"))
+        canvas.bind("<MouseWheel>",
+                    lambda e: canvas.yview_scroll(-1*(e.delta//120), "units"))
         # ─────────────────────────────────────────────────────────────────────
 
         def api_field(r, lbl, hint, var_name, show=""):
             tk.Label(card, text=lbl, font=("Segoe UI", 9, "bold"),
                      fg=C["text"], bg=C["surface"], anchor="w",
                      width=20).grid(row=r*2,   column=0, sticky="nw",
-                                    padx=(16,8), pady=(14,0))
+                                    padx=(16, 8), pady=(14, 0))
             tk.Label(card, text=hint, font=("Segoe UI", 8),
                      fg=C["muted"], bg=C["surface"],
                      anchor="w").grid(row=r*2+1, column=0, columnspan=2,
-                                      sticky="w", padx=(16,8), pady=(0,4))
+                                      sticky="w", padx=(16, 8), pady=(0, 4))
             e = _entry(card, show=show)
-            e.grid(row=r*2, column=1, sticky="ew", padx=(0,16), pady=(14,0), ipady=5)
+            e.grid(row=r*2, column=1, sticky="ew",
+                   padx=(0, 16), pady=(14, 0), ipady=5)
             setattr(self, var_name, e)
 
         api_field(0, "OpenAI API Key",
@@ -1243,19 +1412,20 @@ class XBotApp(tk.Tk):
         tk.Label(card, text="Default AI Provider",
                  font=("Segoe UI", 9, "bold"),
                  fg=C["text"], bg=C["surface"]).grid(
-            row=12, column=0, sticky="w", padx=(16,8), pady=(14,4))
+            row=12, column=0, sticky="w", padx=(16, 8), pady=(14, 4))
         self._e_provider = tk.StringVar(value="groq")
         pf = tk.Frame(card, bg=C["surface"])
-        pf.grid(row=12, column=1, sticky="w", pady=(14,4))
-        for val, lbl in [("openai","OpenAI"), ("gemini","Gemini"), ("perplexity","Perplexity"), ("groq","Groq (free)")]:
+        pf.grid(row=12, column=1, sticky="w", pady=(14, 4))
+        for val, lbl in [("openai", "OpenAI"), ("gemini", "Gemini"), ("perplexity", "Perplexity"), ("groq", "Groq (free)")]:
             tk.Radiobutton(pf, text=lbl, variable=self._e_provider, value=val,
-                           font=("Segoe UI",9), fg=C["text"], bg=C["surface"],
+                           font=("Segoe UI", 9), fg=C["text"], bg=C["surface"],
                            selectcolor=C["surface"], activebackground=C["surface"],
-                           cursor="hand2").pack(side="left", padx=(0,14))
+                           cursor="hand2").pack(side="left", padx=(0, 14))
 
         # Buttons
         bf = tk.Frame(card, bg=C["surface"])
-        bf.grid(row=13, column=0, columnspan=2, sticky="w", padx=16, pady=(12,16))
+        bf.grid(row=13, column=0, columnspan=2,
+                sticky="w", padx=16, pady=(12, 16))
         _btn(bf, "💾  Save Keys", command=self._save_apikeys,
              style="success").pack(side="left")
         _btn(bf, "🔄  Reload", command=self._load_apikeys,
@@ -1263,17 +1433,19 @@ class XBotApp(tk.Tk):
         _btn(bf, "🔧  Проверить Playwright", command=self._check_playwright,
              style="warning").pack(side="left", padx=8)
 
-        tk.Label(card, text="Keys are saved to %APPDATA%/XBot/.env  (created automatically on first launch)",
+        tk.Label(card, text="Keys are saved to active .env (APPDATA for exe build).",
                  font=("Segoe UI", 8), fg=C["muted"],
                  bg=C["surface"]).grid(row=14, column=0, columnspan=2,
-                                       sticky="w", padx=16, pady=(0,16))
+                                       sticky="w", padx=16, pady=(0, 16))
 
         # Load on build
         self.after(500, self._load_apikeys)
+
     def _load_apikeys(self):
-        from config import _ENV_FILE
-        env_path = _ENV_FILE
-        if not env_path.exists(): return
+        from config import _ENV_IN_USE
+        env_path = _ENV_IN_USE
+        if not env_path.exists():
+            return
         vals = {}
         for line in env_path.read_text(encoding="utf-8").splitlines():
             if "=" in line and not line.startswith("#"):
@@ -1292,18 +1464,20 @@ class XBotApp(tk.Tk):
         self._e_tg_admins.delete(0, "end")
         self._e_tg_admins.insert(0, vals.get("TELEGRAM_ADMIN_IDS", ""))
         self._e_provider.set(vals.get("DEFAULT_AI_PROVIDER", "groq"))
+
     def _save_apikeys(self):
-        from config import _ENV_FILE, save_env_value, reload_settings
+        from config import _ENV_IN_USE, save_env_value, reload_settings
         from ai import reset_ai_clients
         # Normalize admin IDs: strip brackets/spaces
         admin_raw = self._e_tg_admins.get().strip()
         admin_clean = ",".join(
-            x.strip() for x in admin_raw.replace("[","").replace("]","").split(",")
+            x.strip() for x in admin_raw.replace("[", "").replace("]", "").split(",")
             if x.strip().lstrip("-").isdigit()
         )
         save_env_value("OPENAI_API_KEY",      self._e_openai.get().strip())
         save_env_value("GEMINI_API_KEY",       self._e_gemini.get().strip())
-        save_env_value("PERPLEXITY_API_KEY",   self._e_perplexity.get().strip())
+        save_env_value("PERPLEXITY_API_KEY",
+                       self._e_perplexity.get().strip())
         save_env_value("GROQ_API_KEY",         self._e_groq.get().strip())
         save_env_value("TELEGRAM_BOT_TOKEN",   self._e_tg_token.get().strip())
         save_env_value("TELEGRAM_ADMIN_IDS",   admin_clean)
@@ -1311,7 +1485,8 @@ class XBotApp(tk.Tk):
         try:
             reload_settings()
             reset_ai_clients()
-            _logger.success(f"[GUI] API keys saved (provider={self._e_provider.get()})")
+            _logger.success(
+                f"[GUI] API keys saved (provider={self._e_provider.get()})")
             messagebox.showinfo("Saved",
                                 "Keys saved and applied!\n\nAI providers reloaded.",
                                 parent=self)
@@ -1391,24 +1566,29 @@ class XBotApp(tk.Tk):
         pg.rowconfigure(1, weight=1)
 
         bar = self._toolbar(pg, "Proxies")
-        _btn(bar, "＋ Add Proxy", command=self._add_proxy, style="success").pack(side="right", padx=4)
-        _btn(bar, "🗑 Delete",    command=self._del_proxy,  style="danger").pack(side="right", padx=4)
-        _btn(bar, "↻ Refresh",   command=self._refresh_proxies, style="ghost").pack(side="right", padx=4)
+        _btn(bar, "＋ Add Proxy", command=self._add_proxy,
+             style="success").pack(side="right", padx=4)
+        _btn(bar, "🗑 Delete",    command=self._del_proxy,
+             style="danger").pack(side="right", padx=4)
+        _btn(bar, "↻ Refresh",   command=self._refresh_proxies,
+             style="ghost").pack(side="right", padx=4)
 
         card = self._card(pg, row=1)
-        card.columnconfigure(0, weight=1); card.rowconfigure(0, weight=1)
+        card.columnconfigure(0, weight=1)
+        card.rowconfigure(0, weight=1)
         self._proxy_tree = self._tree(card, [
             ("id",    "ID",     55),
             ("url",   "URL",    420),
             ("type",  "Type",   80),
             ("fails", "Fails",  70),
-            ("active","Active", 80),
+            ("active", "Active", 80),
         ])
 
     def _refresh_proxies(self):
         async def _load():
             from db import get_proxies
             return await get_proxies(active_only=False)
+
         def _done(fut):
             try:
                 self._proxy_tree.delete(*self._proxy_tree.get_children())
@@ -1416,7 +1596,8 @@ class XBotApp(tk.Tk):
                     self._proxy_tree.insert("", "end", values=(
                         p["id"], p["url"], p["ptype"],
                         p["fail_count"], "Yes" if p["active"] else "No"))
-            except Exception as e: print(f"[GUI] proxies: {e}")
+            except Exception as e:
+                print(f"[GUI] proxies: {e}")
         run_async(_load()).add_done_callback(lambda f: self.after(0, _done, f))
 
     def _add_proxy(self):
@@ -1428,54 +1609,70 @@ class XBotApp(tk.Tk):
         win.grab_set()
 
         hdr = tk.Frame(win, bg=C["accent"], height=44)
-        hdr.pack(fill="x"); hdr.pack_propagate(False)
-        tk.Label(hdr, text="  Add Proxy", font=("Segoe UI",11,"bold"),
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="  Add Proxy", font=("Segoe UI", 11, "bold"),
                  fg="white", bg=C["accent"]).pack(side="left", padx=16)
 
         body = tk.Frame(win, bg=C["bg"])
         body.pack(fill="both", expand=True, padx=24, pady=12)
 
-        _label(body, "Proxy URL:", size=9, color=C["muted"], bg=C["bg"]).pack(anchor="w")
+        _label(body, "Proxy URL:", size=9,
+               color=C["muted"], bg=C["bg"]).pack(anchor="w")
         e = _entry(body)
-        e.pack(fill="x", pady=(4,4), ipady=5)
+        e.pack(fill="x", pady=(4, 4), ipady=5)
         e.insert(0, "socks5://user:pass@host:port")
         e.bind("<FocusIn>", lambda ev: e.select_range(0, "end"))
         _label(body, "Supports: http:// and socks5://",
                size=8, color=C["muted"], bg=C["bg"]).pack(anchor="w")
 
         bf = tk.Frame(body, bg=C["bg"])
-        bf.pack(fill="x", pady=(10,0))
+        bf.pack(fill="x", pady=(10, 0))
 
         def do_add():
             url = e.get().strip()
-            if not url: return
+            if not url:
+                return
+
             async def _go():
                 from db import add_proxy
                 ptype = "socks5" if url.startswith("socks5") else "http"
                 return await add_proxy(url, ptype)
+
             def _done(fut):
                 try:
-                    pid = fut.result(); win.destroy()
-                    _logger.success(f"[GUI] ✅ Прокси добавлен id={pid} url={url}")
+                    pid = fut.result()
+                    win.destroy()
+                    _logger.success(
+                        f"[GUI] ✅ Прокси добавлен id={pid} url={url}")
                     self._refresh_proxies()
-                    messagebox.showinfo("Added", f"✅  Proxy added (id={pid})", parent=self)
+                    messagebox.showinfo(
+                        "Added", f"✅  Proxy added (id={pid})", parent=self)
                 except Exception as ex:
                     _logger.error(f"[GUI] Ошибка добавления прокси: {ex}")
                     messagebox.showerror("Error", str(ex), parent=self)
-            run_async(_go()).add_done_callback(lambda f: self.after(0, _done, f))
+            run_async(_go()).add_done_callback(
+                lambda f: self.after(0, _done, f))
 
-        _btn(bf, "Add Proxy", command=do_add, style="success").pack(side="left")
-        _btn(bf, "Cancel", command=win.destroy, style="ghost").pack(side="left", padx=8)
+        _btn(bf, "Add Proxy", command=do_add,
+             style="success").pack(side="left")
+        _btn(bf, "Cancel", command=win.destroy,
+             style="ghost").pack(side="left", padx=8)
 
     def _del_proxy(self):
         sel = self._proxy_tree.selection()
         if not sel:
-            messagebox.showwarning("Select", "Select a proxy first", parent=self); return
+            messagebox.showwarning(
+                "Select", "Select a proxy first", parent=self)
+            return
         pid = int(self._proxy_tree.item(sel[0])["values"][0])
-        if not messagebox.askyesno("Confirm", f"Delete proxy {pid}?", parent=self): return
+        if not messagebox.askyesno("Confirm", f"Delete proxy {pid}?", parent=self):
+            return
+
         async def _go():
             from db import execute
             await execute("DELETE FROM proxies WHERE id=?", (pid,))
+
         def _done(fut):
             try:
                 fut.result()
@@ -1493,16 +1690,20 @@ class XBotApp(tk.Tk):
         pg.rowconfigure(1, weight=1)
 
         bar = self._toolbar(pg, "Allowed Telegram Users")
-        _btn(bar, "＋ Add User", command=self._add_user,   style="success").pack(side="right", padx=4)
-        _btn(bar, "🗑 Remove",   command=self._del_user,    style="danger").pack(side="right", padx=4)
-        _btn(bar, "↻ Refresh",  command=self._refresh_users, style="ghost").pack(side="right", padx=4)
+        _btn(bar, "＋ Add User", command=self._add_user,
+             style="success").pack(side="right", padx=4)
+        _btn(bar, "🗑 Remove",   command=self._del_user,
+             style="danger").pack(side="right", padx=4)
+        _btn(bar, "↻ Refresh",  command=self._refresh_users,
+             style="ghost").pack(side="right", padx=4)
 
         # Info label
         info = tk.Frame(pg, bg=C["bg"])
-        info.grid(row=0, column=0, sticky="ew", padx=16, pady=(0,0))
+        info.grid(row=0, column=0, sticky="ew", padx=16, pady=(0, 0))
 
         card = self._card(pg, row=1)
-        card.columnconfigure(0, weight=1); card.rowconfigure(0, weight=1)
+        card.columnconfigure(0, weight=1)
+        card.rowconfigure(0, weight=1)
         self._users_tree = self._tree(card, [
             ("telegram_id", "Telegram ID", 140),
             ("label",       "Name / Label", 280),
@@ -1521,6 +1722,7 @@ class XBotApp(tk.Tk):
         async def _load():
             from db import get_allowed_users
             return await get_allowed_users()
+
         def _done(fut):
             try:
                 self._users_tree.delete(*self._users_tree.get_children())
@@ -1543,19 +1745,23 @@ class XBotApp(tk.Tk):
         win.grab_set()
 
         hdr = tk.Frame(win, bg=C["accent"], height=44)
-        hdr.pack(fill="x"); hdr.pack_propagate(False)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
         tk.Label(hdr, text="  Add Allowed User", font=("Segoe UI", 11, "bold"),
                  fg="white", bg=C["accent"]).pack(side="left", padx=16)
 
         body = tk.Frame(win, bg=C["bg"])
         body.pack(fill="both", expand=True, padx=24, pady=12)
 
-        _label(body, "Telegram ID:", size=9, color=C["muted"], bg=C["bg"]).pack(anchor="w")
+        _label(body, "Telegram ID:", size=9,
+               color=C["muted"], bg=C["bg"]).pack(anchor="w")
         e_id = _entry(body)
         e_id.pack(fill="x", pady=(4, 4), ipady=5)
-        _label(body, "Find via @userinfobot", size=8, color=C["muted"], bg=C["bg"]).pack(anchor="w")
+        _label(body, "Find via @userinfobot", size=8,
+               color=C["muted"], bg=C["bg"]).pack(anchor="w")
 
-        _label(body, "Name / Label (optional):", size=9, color=C["muted"], bg=C["bg"]).pack(anchor="w", pady=(8,0))
+        _label(body, "Name / Label (optional):", size=9,
+               color=C["muted"], bg=C["bg"]).pack(anchor="w", pady=(8, 0))
         e_label = _entry(body)
         e_label.pack(fill="x", pady=(4, 8), ipady=5)
 
@@ -1568,25 +1774,34 @@ class XBotApp(tk.Tk):
             try:
                 uid = int(raw)
             except ValueError:
-                messagebox.showwarning("Input", "Telegram ID must be a number", parent=win)
+                messagebox.showwarning(
+                    "Input", "Telegram ID must be a number", parent=win)
                 return
+
             async def _go():
                 from db import add_allowed_user
                 await add_allowed_user(uid, lbl)
+
             def _done(fut):
                 try:
                     fut.result()
                     win.destroy()
                     self._refresh_users()
-                    _logger.success(f"[GUI] ✅ Пользователь Telegram id={uid} добавлен (label={lbl!r})")
-                    messagebox.showinfo("Added", f"✅  User {uid} added.", parent=self)
+                    _logger.success(
+                        f"[GUI] ✅ Пользователь Telegram id={uid} добавлен (label={lbl!r})")
+                    messagebox.showinfo(
+                        "Added", f"✅  User {uid} added.", parent=self)
                 except Exception as ex:
-                    _logger.error(f"[GUI] Ошибка добавления пользователя id={uid}: {ex}")
+                    _logger.error(
+                        f"[GUI] Ошибка добавления пользователя id={uid}: {ex}")
                     messagebox.showerror("Error", str(ex), parent=win)
-            run_async(_go()).add_done_callback(lambda f: self.after(0, _done, f))
+            run_async(_go()).add_done_callback(
+                lambda f: self.after(0, _done, f))
 
-        _btn(bf, "✅  Add User", command=do_add, style="success").pack(side="left")
-        _btn(bf, "Cancel",       command=win.destroy, style="ghost").pack(side="left", padx=8)
+        _btn(bf, "✅  Add User", command=do_add,
+             style="success").pack(side="left")
+        _btn(bf, "Cancel",       command=win.destroy,
+             style="ghost").pack(side="left", padx=8)
 
         # Enter key submits
         win.bind("<Return>", lambda e: do_add())
@@ -1595,19 +1810,26 @@ class XBotApp(tk.Tk):
     def _del_user(self):
         sel = self._users_tree.selection()
         if not sel:
-            messagebox.showwarning("Select", "Select a user first", parent=self); return
+            messagebox.showwarning(
+                "Select", "Select a user first", parent=self)
+            return
         uid = int(self._users_tree.item(sel[0])["values"][0])
-        if not messagebox.askyesno("Confirm", f"Remove user {uid}?", parent=self): return
+        if not messagebox.askyesno("Confirm", f"Remove user {uid}?", parent=self):
+            return
+
         async def _go():
             from db import remove_allowed_user
             await remove_allowed_user(uid)
+
         def _done(fut):
             try:
                 fut.result()
                 self._refresh_users()
-                _logger.warning(f"[GUI] 🗑 Пользователь Telegram id={uid} удалён")
+                _logger.warning(
+                    f"[GUI] 🗑 Пользователь Telegram id={uid} удалён")
             except Exception as e:
-                _logger.error(f"[GUI] Ошибка удаления пользователя id={uid}: {e}")
+                _logger.error(
+                    f"[GUI] Ошибка удаления пользователя id={uid}: {e}")
                 messagebox.showerror("Error", str(e), parent=self)
         run_async(_go()).add_done_callback(lambda f: self.after(0, _done, f))
 
@@ -1619,7 +1841,8 @@ class XBotApp(tk.Tk):
         pg.rowconfigure(2, weight=0)
 
         bar = self._toolbar(pg, "Activity Log")
-        _btn(bar, "↻ Refresh", command=self._refresh_logs, style="ghost").pack(side="right", padx=4)
+        _btn(bar, "↻ Refresh", command=self._refresh_logs,
+             style="ghost").pack(side="right", padx=4)
         self._log_ar_btn_ref = _btn(
             bar,
             "🔁 Auto-refresh ON",
@@ -1641,12 +1864,13 @@ class XBotApp(tk.Tk):
         ]:
             tk.Radiobutton(ff, text=lbl, variable=self._log_filter, value=val,
                            command=self._refresh_logs,
-                           font=("Segoe UI",9), fg=col, bg=C["bg"],
+                           font=("Segoe UI", 9), fg=col, bg=C["bg"],
                            selectcolor=C["bg"], activebackground=C["bg"],
                            cursor="hand2").pack(side="left", padx=6)
 
         card = self._card(pg, row=1)
-        card.columnconfigure(0, weight=1); card.rowconfigure(0, weight=1)
+        card.columnconfigure(0, weight=1)
+        card.rowconfigure(0, weight=1)
         self._log_tree = self._tree(card, [
             ("id",      "ID",      45),
             ("acc",     "Acc",     45),
@@ -1655,7 +1879,7 @@ class XBotApp(tk.Tk):
             ("time",    "Time",   130),
             ("sleep",   "Sleep",   60),
             ("reply",   "Reply",  260),
-            ("post_url","Post URL",200),
+            ("post_url", "Post URL", 200),
         ])
         self._log_tree.tag_configure("posted",  foreground=C["green"])
         self._log_tree.tag_configure("error",   foreground=C["red"])
@@ -1669,33 +1893,37 @@ class XBotApp(tk.Tk):
         tk.Label(detail_card, text="Reply Preview",
                  font=("Segoe UI", 9, "bold"),
                  fg=C["muted"], bg=C["surface"]).grid(
-            row=0, column=0, sticky="w", padx=12, pady=(8,2))
+            row=0, column=0, sticky="w", padx=12, pady=(8, 2))
         self._log_detail = tk.Text(
             detail_card, font=("Segoe UI", 9),
             fg=C["text"], bg=C["bg"],
             height=4, relief="flat", bd=0,
             wrap="word", state="disabled",
         )
-        self._log_detail.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0,8))
+        self._log_detail.grid(
+            row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
 
         # Auto-refresh every 5s
         self._schedule_log_refresh()
 
     def _refresh_logs(self):
         filt = self._log_filter.get()
+
         async def _load():
             from db import fetchall
             sql = ("SELECT id,account_id,status,ai_provider,created_at,"
                    "sleep_seconds,reply_text,post_url FROM posts_log")
-            if filt != "all": sql += f" WHERE status='{filt}'"
+            if filt != "all":
+                sql += f" WHERE status='{filt}'"
             sql += " ORDER BY id DESC LIMIT 200"
             return await fetchall(sql)
+
         def _done(fut):
             try:
                 self._log_tree.delete(*self._log_tree.get_children())
                 for r in fut.result():
                     st = r["status"]
-                    tag = st if st in ("posted","error","pending") else ""
+                    tag = st if st in ("posted", "error", "pending") else ""
                     sleep_s = r.get("sleep_seconds") or 0
                     sleep_str = f"{int(sleep_s)}s" if sleep_s else "—"
                     self._log_tree.insert("", "end", tags=(tag,), values=(
@@ -1705,13 +1933,15 @@ class XBotApp(tk.Tk):
                         sleep_str,
                         str(r.get("reply_text") or "")[:60],
                         str(r.get("post_url") or "—")))
-            except Exception as e: print(f"[GUI] logs: {e}")
+            except Exception as e:
+                print(f"[GUI] logs: {e}")
         run_async(_load()).add_done_callback(lambda f: self.after(0, _done, f))
 
     def _schedule_log_refresh(self):
         self._refresh_logs()
         if getattr(self, "_log_autorefresh", True):
-            self._log_refresh_after_id = self.after(5000, self._schedule_log_refresh)
+            self._log_refresh_after_id = self.after(
+                5000, self._schedule_log_refresh)
         else:
             self._log_refresh_after_id = None
 
@@ -1719,7 +1949,8 @@ class XBotApp(tk.Tk):
         self._log_autorefresh = not self._log_autorefresh
         if getattr(self, "_log_ar_btn_ref", None) is not None:
             self._log_ar_btn_ref.config(
-                text=("🔁 Auto-refresh ON" if self._log_autorefresh else "⏸ Auto-refresh OFF")
+                text=(
+                    "🔁 Auto-refresh ON" if self._log_autorefresh else "⏸ Auto-refresh OFF")
             )
         if not self._log_autorefresh and self._log_refresh_after_id is not None:
             try:
@@ -1738,10 +1969,12 @@ class XBotApp(tk.Tk):
         vals = self._log_tree.item(sel[0])["values"]
         # vals: id, acc, status, ai, time, sleep, reply (truncated), post_url
         log_id = vals[0]
+
         async def _load_detail():
             from db import fetchone
             r = await fetchone("SELECT reply_text, post_text, comment_text, post_url FROM posts_log WHERE id=?", (log_id,))
             return r
+
         def _done(fut):
             try:
                 r = fut.result()
@@ -1749,15 +1982,18 @@ class XBotApp(tk.Tk):
                     return
                 self._log_detail.config(state="normal")
                 self._log_detail.delete("1.0", "end")
-                self._log_detail.insert("end", f"REPLY: {r.get('reply_text','') or '—'}\n\n")
-                self._log_detail.insert("end", f"POST: {r.get('post_text','')[:200] or '—'}\n")
-                url = r.get("post_url","")
+                self._log_detail.insert(
+                    "end", f"REPLY: {r.get('reply_text', '') or '—'}\n\n")
+                self._log_detail.insert(
+                    "end", f"POST: {r.get('post_text', '')[:200] or '—'}\n")
+                url = r.get("post_url", "")
                 if url:
                     self._log_detail.insert("end", f"URL: {url}")
                 self._log_detail.config(state="disabled")
             except Exception as e:
                 print(f"[GUI] log detail: {e}")
-        run_async(_load_detail()).add_done_callback(lambda f: self.after(0, _done, f))
+        run_async(_load_detail()).add_done_callback(
+            lambda f: self.after(0, _done, f))
 
     # ── Stats ──────────────────────────────────────────────────────────────────
 
@@ -1766,11 +2002,12 @@ class XBotApp(tk.Tk):
         pg.rowconfigure(2, weight=1)
 
         bar = self._toolbar(pg, "Statistics")
-        _btn(bar, "↻ Refresh", command=self._refresh_stats, style="ghost").pack(side="right")
+        _btn(bar, "↻ Refresh", command=self._refresh_stats,
+             style="ghost").pack(side="right")
 
         # Summary cards
         cards_row = tk.Frame(pg, bg=C["bg"])
-        cards_row.grid(row=1, column=0, sticky="ew", padx=12, pady=(0,8))
+        cards_row.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
         self._sc: dict[str, tk.Label] = {}
         for key, lbl, accent in [
             ("today",    "Replies Today",   C["accent"]),
@@ -1783,15 +2020,16 @@ class XBotApp(tk.Tk):
                          highlightbackground=C["border"])
             c.pack(side="left", padx=6, ipadx=20, ipady=12,
                    expand=True, fill="x")
-            tk.Label(c, text=lbl, font=("Segoe UI",8),
+            tk.Label(c, text=lbl, font=("Segoe UI", 8),
                      fg=C["muted"], bg=C["surface"]).pack()
-            v = tk.Label(c, text="—", font=("Segoe UI",24,"bold"),
+            v = tk.Label(c, text="—", font=("Segoe UI", 24, "bold"),
                          fg=accent, bg=C["surface"])
             v.pack()
             self._sc[key] = v
 
         card = self._card(pg, row=2)
-        card.columnconfigure(0, weight=1); card.rowconfigure(0, weight=1)
+        card.columnconfigure(0, weight=1)
+        card.rowconfigure(0, weight=1)
         self._stats_tree = self._tree(card, [
             ("username", "Account", 220),
             ("today",    "Today",   100),
@@ -1805,10 +2043,12 @@ class XBotApp(tk.Tk):
             try:
                 from main import worker_manager
                 running = len(worker_manager.running_accounts())
-            except Exception: running = 0
+            except Exception:
+                running = 0
             accs = await get_accounts(active_only=False)
             active = sum(1 for a in accs if a["active"])
-            total = 0; rows = []
+            total = 0
+            rows = []
             for a in accs:
                 cnt = await get_daily_count(a["id"])
                 total += cnt
@@ -1818,6 +2058,7 @@ class XBotApp(tk.Tk):
                 rows.append((f"@{a['username']}", cnt, lim, f"{bar}  {pct}%"))
             tp = await fetchone("SELECT COUNT(*) n FROM posts_log WHERE status='posted'")
             return rows, total, (tp["n"] if tp else 0), active, running
+
         def _done(fut):
             try:
                 rows, today, posted, active, workers = fut.result()
@@ -1826,14 +2067,17 @@ class XBotApp(tk.Tk):
                 self._sc["accounts"].config(text=str(active))
                 self._sc["workers"].config(text=str(workers))
                 self._stats_tree.delete(*self._stats_tree.get_children())
-                for row in rows: self._stats_tree.insert("", "end", values=row)
-            except Exception as e: print(f"[GUI] stats: {e}")
+                for row in rows:
+                    self._stats_tree.insert("", "end", values=row)
+            except Exception as e:
+                print(f"[GUI] stats: {e}")
         run_async(_load()).add_done_callback(lambda f: self.after(0, _done, f))
 
     # ── Telegram Bot ───────────────────────────────────────────────────────────
 
     def _toggle_tg_bot(self):
-        if self._tg_running: return
+        if self._tg_running:
+            return
         self._tg_running = True
         self._tg_btn.config(text="🔄  Starting...", bg=C["yellow"])
         self.update()
@@ -1853,7 +2097,8 @@ class XBotApp(tk.Tk):
                     print(f"[Bot] {e}")
                 self.after(0, lambda: (
                     setattr(self, "_tg_running", False),
-                    self._tg_btn.config(text="▶  Start Telegram Bot", bg=C["green"]),
+                    self._tg_btn.config(
+                        text="▶  Start Telegram Bot", bg=C["green"]),
                     self._tg_dot.config(text="● Telegram: Error", fg=C["red"]),
                 ))
 
@@ -1864,12 +2109,15 @@ class XBotApp(tk.Tk):
         def _check():
             if t.is_alive():
                 _logger.success("[GUI] ✅ Telegram-бот запущен и работает")
-                self._tg_btn.config(text="✓  Bot Running", bg=_dim(C["green"], 10))
+                self._tg_btn.config(text="✓  Bot Running",
+                                    bg=_dim(C["green"], 10))
                 self._tg_dot.config(text="●  Telegram: ON", fg=C["green"])
             else:
                 self._tg_running = False
-                _logger.warning("[GUI] Telegram-бот не запустился (поток завершился)")
-                self._tg_btn.config(text="▶  Start Telegram Bot", bg=C["green"])
+                _logger.warning(
+                    "[GUI] Telegram-бот не запустился (поток завершился)")
+                self._tg_btn.config(
+                    text="▶  Start Telegram Bot", bg=C["green"])
                 self._tg_dot.config(text="● Telegram: OFF", fg=C["red"])
         self.after(4000, _check)
 
@@ -1891,6 +2139,7 @@ class XBotApp(tk.Tk):
 def main():
     app = XBotApp()
     app.mainloop()
+
 
 if __name__ == "__main__":
     main()

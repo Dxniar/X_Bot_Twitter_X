@@ -2074,7 +2074,6 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     if not await _is_admin(update):
 
-        await update.message.reply_text("⛔ Нет доступа.")
         uid = update.effective_user.id if update.effective_user else None
         allowed = get_settings().telegram_admin_ids
         logger.warning(
@@ -2082,6 +2081,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
             f"⛔ Нет доступа.\nВаш user_id: {uid}\nРазрешённые: {allowed}"
         )
+
         return
 
     await _show_main_menu(update.message, edit=False)
@@ -2144,6 +2144,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer()
 
     if not await _is_admin(update):
+
         uid = update.effective_user.id if update.effective_user else None
         allowed = get_settings().telegram_admin_ids
         logger.warning(
