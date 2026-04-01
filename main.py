@@ -130,7 +130,8 @@ class BotWorker:
         logger.info(f"[Worker:{self.account_id}] Starting...")
         account = await get_account(self.account_id)
         if not account or not account["active"]:
-            logger.warning(f"[Worker:{self.account_id}] Account not found or inactive")
+            logger.warning(
+                f"[Worker:{self.account_id}] Account not found or inactive")
             return
 
         while not self._stop_event.is_set():
@@ -139,7 +140,8 @@ class BotWorker:
             if extra_wait > 0:
                 h, m = divmod(int(extra_wait // 60), 60)
                 label = f"{h}ч {m}м" if h else f"{m}м"
-                logger.info(f"[Worker:{self.account_id}] 😴 Manual sleep {label}")
+                logger.info(
+                    f"[Worker:{self.account_id}] 😴 Manual sleep {label}")
                 self.is_sleeping = True
                 self.next_post_at = self._manual_sleep_until
                 self._manual_sleep_until = 0.0
@@ -169,7 +171,8 @@ class BotWorker:
                     self._posting_lock.release()
                 settings = await get_all_settings(self.account_id)
                 comments_in_row = max(
-                    1, min(10, _int(settings.get("comments_in_row"), BotDefaults.comments_in_row))
+                    1, min(10, _int(settings.get("comments_in_row"),
+                           BotDefaults.comments_in_row))
                 )
                 for idx in range(comments_in_row):
                     await _check_license()
@@ -193,7 +196,8 @@ class BotWorker:
 
             settings = await get_all_settings(self.account_id)
             base_delay = min(
-                _int(settings.get("min_delay"), BotDefaults.min_delay_seconds), 3600
+                _int(settings.get("min_delay"),
+                     BotDefaults.min_delay_seconds), 3600
             )
 
             jitter_range = base_delay * 0.33
@@ -210,7 +214,8 @@ class BotWorker:
 
     async def _cycle(self, account: dict) -> None:
         settings = await get_all_settings(self.account_id)
-        daily_limit = _int(settings.get("daily_limit"), BotDefaults.daily_comment_limit)
+        daily_limit = _int(settings.get("daily_limit"),
+                           BotDefaults.daily_comment_limit)
         today_count = await get_daily_count(self.account_id)
 
         logger.info(
@@ -244,7 +249,8 @@ class BotWorker:
             active_hours_end=active_h_end,
             outside_sleep_min=outside_sleep,
             wake_event=self._wake_event,
-            hourly_cap=_int(settings.get("hourly_cap"), BotDefaults.hourly_cap),
+            hourly_cap=_int(settings.get("hourly_cap"),
+                            BotDefaults.hourly_cap),
             burst_30min_cap=_int(
                 settings.get("burst_30min_cap"), BotDefaults.burst_30min_cap
             ),
@@ -262,7 +268,8 @@ class BotWorker:
         ) as client:
             username = await client.verify_session()
             if not username:
-                logger.error(f"[Worker:{self.account_id}] Session invalid! Stopping.")
+                logger.error(
+                    f"[Worker:{self.account_id}] Session invalid! Stopping.")
                 self.stop()
                 return
 
@@ -278,14 +285,16 @@ class BotWorker:
             # Sort tweets by likes desc — pick the best one first
             tweets.sort(key=lambda t: t.likes, reverse=True)
 
-            system_prompt = settings.get("system_prompt", BotDefaults.system_prompt)
+            system_prompt = settings.get(
+                "system_prompt", BotDefaults.system_prompt)
             ai_provider = settings.get("ai_provider") or None
             # If per-account provider not set, use global default from .env
             if not ai_provider:
                 from config import get_settings as _gs
 
                 ai_provider = _gs().default_ai_provider
-            auto_publish = settings.get("auto_publish", BotDefaults.auto_publish)
+            auto_publish = settings.get(
+                "auto_publish", BotDefaults.auto_publish)
             sort_by = settings.get("comment_sort", BotDefaults.comment_sort)
 
             # ── Режим чередования: чётный цикл → пост, нечётный → комментарий ─
@@ -552,7 +561,8 @@ class BotWorker:
         mode = settings.get("search_mode", BotDefaults.search_mode)
         min_likes = _int(settings.get("min_likes"), BotDefaults.min_likes)
         min_rt = _int(settings.get("min_retweets"), BotDefaults.min_retweets)
-        max_age = _int(settings.get("max_age_min"), BotDefaults.max_post_age_minutes)
+        max_age = _int(settings.get("max_age_min"),
+                       BotDefaults.max_post_age_minutes)
         lang = settings.get("lang_filter", "en")  # default: English only
         if settings.get("simple_filters", BotDefaults.simple_filters):
             min_likes = 0
@@ -578,7 +588,8 @@ class BotWorker:
             shuffled_kws = list(keywords)
             random.shuffle(shuffled_kws)
             for kw in shuffled_kws[:5]:  # max 5 keywords per cycle
-                logger.info(f"[Worker:{self.account_id}] Searching keyword: '{kw}'")
+                logger.info(
+                    f"[Worker:{self.account_id}] Searching keyword: '{kw}'")
                 found = await client.search_tweets(
                     query=kw,
                     min_likes=min_likes,
@@ -613,7 +624,8 @@ class BotWorker:
             lists = await get_x_lists(self.account_id)
             logger.debug(f"[Worker:{self.account_id}] X Lists: {lists}")
             if not lists:
-                logger.warning(f"[Worker:{self.account_id}] No X Lists configured")
+                logger.warning(
+                    f"[Worker:{self.account_id}] No X Lists configured")
                 return []
             url = random.choice(lists)
             logger.info(f"[Worker:{self.account_id}] Fetching list: {url}")
@@ -639,7 +651,8 @@ class BotWorker:
             )
             return tweets
 
-        logger.error(f"[Worker:{self.account_id}] Unknown search_mode: '{mode}'")
+        logger.error(
+            f"[Worker:{self.account_id}] Unknown search_mode: '{mode}'")
         return []
 
 
@@ -758,11 +771,13 @@ async def _check_license() -> None:
         url = f"{_LICENSE_URL}?_={int(_t.time())}"
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
             r = await client.get(
-                url, headers={"Cache-Control": "no-cache", "Pragma": "no-cache"}
+                url, headers={"Cache-Control": "no-cache",
+                              "Pragma": "no-cache"}
             )
             status = r.text.strip().lower()
         if status != "active":
-            logger.warning("[main] License status is not active. Skipping cycle.")
+            logger.warning(
+                "[main] License status is not active. Skipping cycle.")
             raise RuntimeError("license_inactive")
     except Exception:
         # Network/license check errors should never crash the whole app
@@ -932,7 +947,8 @@ async def cli_reset_daily(acc_id: int):
     await init_db()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     await execute(
-        "DELETE FROM daily_stats WHERE account_id=? AND date=?", (acc_id, today)
+        "DELETE FROM daily_stats WHERE account_id=? AND date=?", (
+            acc_id, today)
     )
     print(f"✅ Daily counter reset for account {acc_id}")
 
@@ -972,7 +988,8 @@ async def _notify_fatal(exc: BaseException) -> None:
                 try:
                     await _hc.post(
                         f"https://api.telegram.org/bot{token}/sendMessage",
-                        json={"chat_id": aid, "text": text, "parse_mode": "Markdown"},
+                        json={"chat_id": aid, "text": text,
+                              "parse_mode": "Markdown"},
                     )
                 except Exception:
                     pass
