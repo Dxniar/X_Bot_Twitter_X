@@ -929,6 +929,7 @@ async def cli_add_account():
         ("min_likes", BotDefaults.min_likes),
         ("min_retweets", BotDefaults.min_retweets),
         ("max_age_min", BotDefaults.max_post_age_minutes),
+        ("lang_filter", BotDefaults.lang_filter),
         ("comment_sort", BotDefaults.comment_sort),
         ("auto_publish", BotDefaults.auto_publish),
         ("min_delay", BotDefaults.min_delay_seconds),
