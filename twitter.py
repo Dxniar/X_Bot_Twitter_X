@@ -19,6 +19,7 @@ GRAPHQL = _GRAPHQL_ORIG.replace("https://twitter.com", "https://x.com")
 
 # Sentinel returned by post_reply when the target post is unavailable
 POST_UNAVAILABLE = object()
+_BROWSER_POSTER_MISSING_LOGGED = False
 
 # ─────────────────────────────────────────────
 # DATA MODELS
@@ -72,7 +73,6 @@ class TwitterClient(TwitterAuth):
         super().__init__(*args, **kwargs)
         self._search_graphql_broken: bool = False
         self._search_account_restricted: bool = False
-        self._browser_poster_missing_logged: bool = False
 
     # ── Tweet parsing ──────────────────────────────────────────────────
 
@@ -980,6 +980,7 @@ class TwitterClient(TwitterAuth):
 
     async def post_reply(self, reply_text: str, in_reply_to_tweet_id: str,
                          tweet_url: Optional[str] = None) -> Optional[str]:
+        global _BROWSER_POSTER_MISSING_LOGGED
         try:
             from browser_poster import get_browser_poster
             poster = await get_browser_poster()
@@ -997,9 +998,9 @@ class TwitterClient(TwitterAuth):
 
             logger.warning(f"[Acc {self.account_id}] Browser не смог опубликовать — fallback to API")
         except ModuleNotFoundError as e:
-            if not self._browser_poster_missing_logged:
+            if not _BROWSER_POSTER_MISSING_LOGGED:
                 logger.warning(f"[Acc {self.account_id}] browser_poster недоступен: {e}")
-                self._browser_poster_missing_logged = True
+                _BROWSER_POSTER_MISSING_LOGGED = True
             else:
                 logger.debug(f"[Acc {self.account_id}] browser_poster missing: {e}")
         except Exception as e:
@@ -1345,6 +1346,8 @@ class TwitterClient(TwitterAuth):
                         self._CREATE_TWEET_QUERY_IDS.insert(0, qid)
                     logger.success(f"[Acc {self.account_id}] GraphQL replied → {tweet_id}")
                     return tweet_id
+            except (TwitterClient._PostRestricted, TwitterClient._PostUnavailable):
+                raise
             except Exception as e:
                 logger.debug(f"[GraphQL:{qid}] failed: {e}")
                 await asyncio.sleep(random.uniform(3, 8))
