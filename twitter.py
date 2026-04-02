@@ -24,6 +24,7 @@ POST_UNAVAILABLE = object()
 # DATA MODELS
 # ─────────────────────────────────────────────
 
+
 @dataclass
 class Tweet:
     id: str
@@ -72,6 +73,7 @@ class TwitterClient(TwitterAuth):
         super().__init__(*args, **kwargs)
         self._search_graphql_broken: bool = False
         self._search_account_restricted: bool = False
+        self._browser_poster_missing_logged: bool = False
 
     # ── Tweet parsing ──────────────────────────────────────────────────
 
@@ -88,7 +90,7 @@ class TwitterClient(TwitterAuth):
                 or result.get("user_results", {}).get("result", {})
             )
             _user_legacy = _user_result.get("legacy", {})
-            _user_core   = _user_result.get("core", {})
+            _user_core = _user_result.get("core", {})
 
             screen_name = (
                 _user_core.get("screen_name", "")
@@ -128,19 +130,23 @@ class TwitterClient(TwitterAuth):
             if not screen_name:
                 user_typename = _user_result.get("__typename", "")
                 if user_typename in ("UserUnavailable", "UserBlocked"):
-                    logger.debug(f"[Parse] tweet {tweet_id} — user {user_typename}, skipping")
+                    logger.debug(
+                        f"[Parse] tweet {tweet_id} — user {user_typename}, skipping")
                     return None
-                logger.debug(f"[Parse] tweet {tweet_id} — screen_name missing (typename={user_typename!r}), skipping")
+                logger.debug(
+                    f"[Parse] tweet {tweet_id} — screen_name missing (typename={user_typename!r}), skipping")
                 return None
 
-            author_id = _user_legacy.get("id_str", "") or str(_user_result.get("id", ""))
+            author_id = _user_legacy.get("id_str", "") or str(
+                _user_result.get("id", ""))
             image_urls = []
             for media in (
                 legacy.get("extended_entities", {}).get("media", [])
                 or legacy.get("entities", {}).get("media", [])
             ):
                 if media.get("type") in ("photo", "animated_gif"):
-                    url = media.get("media_url_https") or media.get("media_url")
+                    url = media.get(
+                        "media_url_https") or media.get("media_url")
                     if url:
                         image_urls.append(url + "?format=jpg&name=large")
 
@@ -199,7 +205,8 @@ class TwitterClient(TwitterAuth):
     def _filter_tweets(self, tweets: list[Tweet], min_likes: int,
                        min_retweets: int, max_age_minutes: int, limit: int,
                        lang: str = "en") -> list[Tweet]:
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        cutoff = datetime.now(timezone.utc) - \
+            timedelta(minutes=max_age_minutes)
         result = []
         for t in tweets:
             if t.likes < min_likes or t.retweets < min_retweets:
@@ -209,7 +216,8 @@ class TwitterClient(TwitterAuth):
                 if dt and dt < cutoff:
                     continue
             if lang and t.lang and t.lang.lower() != lang.lower():
-                logger.debug(f"[Filter] Skipping tweet {t.id} — lang={t.lang!r} (expected {lang!r})")
+                logger.debug(
+                    f"[Filter] Skipping tweet {t.id} — lang={t.lang!r} (expected {lang!r})")
                 continue
             result.append(t)
             if len(result) >= limit:
@@ -261,15 +269,18 @@ class TwitterClient(TwitterAuth):
 
     @staticmethod
     def _build_search_query(query: str, min_likes: int = 0, min_retweets: int = 0,
-                             lang: str = "en") -> str:
+                            lang: str = "en") -> str:
         if TwitterClient._is_raw_query(query):
             refreshed = TwitterClient._refresh_since_date(query)
             if refreshed != query:
-                logger.debug(f"[QueryBuilder] Auto-refreshed since: date in raw query")
+                logger.debug(
+                    f"[QueryBuilder] Auto-refreshed since: date in raw query")
             if "min_faves:" not in refreshed and min_likes > 0:
                 refreshed = refreshed.strip() + f" min_faves:{min_likes}"
-                logger.debug(f"[QueryBuilder] Injected min_faves:{min_likes} into raw query")
-            logger.debug(f"[QueryBuilder] Raw query detected — passing through: {refreshed[:120]}")
+                logger.debug(
+                    f"[QueryBuilder] Injected min_faves:{min_likes} into raw query")
+            logger.debug(
+                f"[QueryBuilder] Raw query detected — passing through: {refreshed[:120]}")
             return refreshed.strip()
 
         keywords = [k.strip() for k in query.split(",") if k.strip()]
@@ -291,8 +302,8 @@ class TwitterClient(TwitterAuth):
     # ── Search by keywords ─────────────────────────────────────────────
 
     async def search_tweets(self, query: str, min_likes: int = 200, min_retweets: int = 0,
-                             max_age_minutes: int = 60, limit: int = 20,
-                             lang: str = "en") -> list[Tweet]:
+                            max_age_minutes: int = 60, limit: int = 20,
+                            lang: str = "en") -> list[Tweet]:
         try:
             from browser_poster import get_browser_poster
             poster = await get_browser_poster()
@@ -311,12 +322,15 @@ class TwitterClient(TwitterAuth):
                 return results
             logger.debug(f"[search:browser] 0 results — falling back to API")
         except Exception as e:
-            logger.debug(f"[search:browser] unavailable ({e}) — falling back to API")
+            logger.debug(
+                f"[search:browser] unavailable ({e}) — falling back to API")
 
         if self._search_graphql_broken:
-            logger.debug(f"[search] GraphQL known broken — trying REST fallbacks first")
+            logger.debug(
+                f"[search] GraphQL known broken — trying REST fallbacks first")
             if self._search_account_restricted:
-                logger.debug("[search] Account search restricted — skipping REST, using guest token")
+                logger.debug(
+                    "[search] Account search restricted — skipping REST, using guest token")
                 return await self._search_via_guest_token(
                     query, min_likes, min_retweets, max_age_minutes, limit, lang
                 )
@@ -325,12 +339,14 @@ class TwitterClient(TwitterAuth):
             )
             if rest_result:
                 return rest_result
-            logger.debug(f"[search] REST also failed — falling back to guest token")
+            logger.debug(
+                f"[search] REST also failed — falling back to guest token")
             return await self._search_via_guest_token(
                 query, min_likes, min_retweets, max_age_minutes, limit, lang
             )
 
-        full_query = self._build_search_query(query, min_likes, min_retweets, lang)
+        full_query = self._build_search_query(
+            query, min_likes, min_retweets, lang)
 
         if not TwitterClient._is_raw_query(query):
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -340,7 +356,7 @@ class TwitterClient(TwitterAuth):
 
         is_raw = self._is_raw_query(query)
         effective_min_likes = self._parse_min_faves(query) if is_raw else 0
-        effective_lang      = ""
+        effective_lang = ""
         from urllib.parse import quote
         search_referer = f"https://x.com/search?q={quote(full_query)}&src=typed_query&f=live"
         params = {
@@ -356,33 +372,40 @@ class TwitterClient(TwitterAuth):
                     if qid != self._SEARCH_TIMELINE_QUERY_IDS[0]:
                         self._SEARCH_TIMELINE_QUERY_IDS.remove(qid)
                         self._SEARCH_TIMELINE_QUERY_IDS.insert(0, qid)
-                        logger.info(f"[QueryID] SearchTimeline updated to {qid}")
+                        logger.info(
+                            f"[QueryID] SearchTimeline updated to {qid}")
                     tweets = self._extract_timeline_tweets(data)
                     _ml = effective_min_likes if is_raw else 0
                     _lg = effective_lang if is_raw else lang
-                    result = self._filter_tweets(tweets, _ml, 0, max_age_minutes, limit, lang=_lg)
-                    logger.info(f"[search:graphql] '{query[:80]}' → {len(result)} tweets")
+                    result = self._filter_tweets(
+                        tweets, _ml, 0, max_age_minutes, limit, lang=_lg)
+                    logger.info(
+                        f"[search:graphql] '{query[:80]}' → {len(result)} tweets")
                     return result
             except Exception as e:
                 logger.debug(f"[search] queryId {qid} failed: {e}")
                 continue
 
-        logger.warning(f"[search] All GraphQL SearchTimeline queryIds failed — trying REST fallback")
+        logger.warning(
+            f"[search] All GraphQL SearchTimeline queryIds failed — trying REST fallback")
         result = await self._search_tweets_rest(query, min_likes, min_retweets, max_age_minutes, limit, lang=lang)
         if not result:
             self._search_graphql_broken = True
-            logger.info(f"[search] Marking GraphQL search broken — future calls use guest token")
-            logger.info(f"[search] Last resort: HomeTimeline keyword filter for '{query[:60]}'")
+            logger.info(
+                f"[search] Marking GraphQL search broken — future calls use guest token")
+            logger.info(
+                f"[search] Last resort: HomeTimeline keyword filter for '{query[:60]}'")
             result = await self._search_via_home_timeline(
                 query, min_likes, max_age_minutes, lang, limit,
             )
         return result
 
     async def _search_tweets_rest(self, query: str, min_likes: int = 0, min_retweets: int = 0,
-                                   max_age_minutes: int = 60, limit: int = 20,
-                                   lang: str = "en") -> list[Tweet]:
+                                  max_age_minutes: int = 60, limit: int = 20,
+                                  lang: str = "en") -> list[Tweet]:
         from datetime import datetime, timezone, timedelta
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        cutoff = datetime.now(timezone.utc) - \
+            timedelta(minutes=max_age_minutes)
 
         def _parse_v1_tweet(t: dict) -> Optional[Tweet]:
             if t.get("retweeted_status"):
@@ -405,7 +428,8 @@ class TwitterClient(TwitterAuth):
                 views=0,
                 reply_count=t.get("reply_count", 0),
                 created_at=t.get("created_at", ""),
-                conversation_id=str(t.get("conversation_id_str", t.get("id_str", ""))),
+                conversation_id=str(
+                    t.get("conversation_id_str", t.get("id_str", ""))),
                 lang=t.get("lang", "en"),
             )
 
@@ -421,7 +445,8 @@ class TwitterClient(TwitterAuth):
                     continue
                 if tweet.created_at:
                     try:
-                        dt = datetime.strptime(tweet.created_at, "%a %b %d %H:%M:%S +0000 %Y").replace(tzinfo=timezone.utc)
+                        dt = datetime.strptime(
+                            tweet.created_at, "%a %b %d %H:%M:%S +0000 %Y").replace(tzinfo=timezone.utc)
                         if dt < cutoff:
                             continue
                     except Exception:
@@ -433,7 +458,8 @@ class TwitterClient(TwitterAuth):
 
         try:
             from urllib.parse import quote as _q, urlparse
-            full_query = self._build_search_query(query, min_likes, min_retweets, lang)
+            full_query = self._build_search_query(
+                query, min_likes, min_retweets, lang)
             url1 = "https://x.com/i/api/2/search/adaptive.json"
             self._refresh_request_headers(
                 referer=f"https://x.com/search?q={_q(full_query)}&src=typed_query&f=live",
@@ -451,15 +477,18 @@ class TwitterClient(TwitterAuth):
             }
             resp1 = await self._client.get(url1, params=p1)
             body_len = len(resp1.content)
-            logger.info(f"[search:adaptive] HTTP {resp1.status_code} body={body_len}b")
+            logger.info(
+                f"[search:adaptive] HTTP {resp1.status_code} body={body_len}b")
             if resp1.status_code == 200 and body_len > 0:
                 try:
                     data1 = resp1.json()
                 except Exception as json_err:
-                    logger.debug(f"[search:adaptive] JSON parse error: {json_err}")
+                    logger.debug(
+                        f"[search:adaptive] JSON parse error: {json_err}")
                     data1 = {}
-                raw_tweets_map = data1.get("globalObjects", {}).get("tweets", {})
-                users_map      = data1.get("globalObjects", {}).get("users", {})
+                raw_tweets_map = data1.get(
+                    "globalObjects", {}).get("tweets", {})
+                users_map = data1.get("globalObjects", {}).get("users", {})
                 raw_list = []
                 for tid, t in raw_tweets_map.items():
                     user_id = str(t.get("user_id_str", t.get("user_id", "")))
@@ -470,12 +499,15 @@ class TwitterClient(TwitterAuth):
                         "protected":   user.get("protected", False),
                     }
                     raw_list.append(t)
-                raw_list.sort(key=lambda x: x.get("favorite_count", 0), reverse=True)
+                raw_list.sort(key=lambda x: x.get(
+                    "favorite_count", 0), reverse=True)
                 res1 = _filter_v1(raw_list)
                 if res1:
-                    logger.info(f"[search:adaptive] '{query}' → {len(res1)} tweets")
+                    logger.info(
+                        f"[search:adaptive] '{query}' → {len(res1)} tweets")
                     return res1
-                logger.debug(f"[search:adaptive] 0 after filters (raw={len(raw_list)})")
+                logger.debug(
+                    f"[search:adaptive] 0 after filters (raw={len(raw_list)})")
             else:
                 if body_len == 0 and resp1.status_code == 200:
                     self._search_account_restricted = True
@@ -486,7 +518,8 @@ class TwitterClient(TwitterAuth):
                         f"или включите браузерный поиск (Playwright)."
                     )
                 else:
-                    logger.info(f"[search:adaptive] rejected — HTTP {resp1.status_code}")
+                    logger.info(
+                        f"[search:adaptive] rejected — HTTP {resp1.status_code}")
         except Exception as e:
             logger.debug(f"[search:adaptive] Failed: {e}")
 
@@ -505,7 +538,8 @@ class TwitterClient(TwitterAuth):
             }
             resp2 = await self._client.get(url2, params=p2)
             body_len2 = len(resp2.content)
-            logger.info(f"[search:v1.1] HTTP {resp2.status_code} body={body_len2}b")
+            logger.info(
+                f"[search:v1.1] HTTP {resp2.status_code} body={body_len2}b")
             if resp2.status_code == 200 and body_len2 > 0:
                 try:
                     data2 = resp2.json()
@@ -514,13 +548,16 @@ class TwitterClient(TwitterAuth):
                     data2 = {}
                 res2 = _filter_v1(data2.get("statuses", []))
                 if res2:
-                    logger.info(f"[search:v1.1] '{query}' → {len(res2)} tweets")
+                    logger.info(
+                        f"[search:v1.1] '{query}' → {len(res2)} tweets")
                     return res2
             else:
                 if body_len2 == 0:
-                    logger.info(f"[search:v1.1] empty body (HTTP 200, 0b) — session may lack search access")
+                    logger.info(
+                        f"[search:v1.1] empty body (HTTP 200, 0b) — session may lack search access")
                 else:
-                    logger.info(f"[search:v1.1] rejected — HTTP {resp2.status_code}")
+                    logger.info(
+                        f"[search:v1.1] rejected — HTTP {resp2.status_code}")
         except Exception as e:
             logger.debug(f"[search:v1.1] Failed: {e}")
 
@@ -546,7 +583,8 @@ class TwitterClient(TwitterAuth):
             "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D"
             "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
         )
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        cutoff = datetime.now(timezone.utc) - \
+            timedelta(minutes=max_age_minutes)
 
         try:
             import httpx as _httpx
@@ -568,7 +606,8 @@ class TwitterClient(TwitterAuth):
                     "https://api.twitter.com/1.1/guest/activate.json"
                 )
                 if activate_resp.status_code != 200:
-                    logger.debug(f"[search:guest] activate failed HTTP {activate_resp.status_code}")
+                    logger.debug(
+                        f"[search:guest] activate failed HTTP {activate_resp.status_code}")
                     return []
                 guest_token = activate_resp.json().get("guest_token", "")
                 if not guest_token:
@@ -595,7 +634,8 @@ class TwitterClient(TwitterAuth):
                     try:
                         resp = await guest_client.get(endpoint, params=params)
                         if resp.status_code != 200 or not resp.content:
-                            logger.debug(f"[search:guest] qid {qid} → HTTP {resp.status_code} {len(resp.content)}b")
+                            logger.debug(
+                                f"[search:guest] qid {qid} → HTTP {resp.status_code} {len(resp.content)}b")
                             continue
                         data = resp.json()
                         tweets = self._extract_timeline_tweets(data)
@@ -613,9 +653,11 @@ class TwitterClient(TwitterAuth):
                             if len(result) >= limit:
                                 break
                         if result:
-                            logger.success(f"[search:guest] '{query}' → {len(result)} tweets (guest token)")
+                            logger.success(
+                                f"[search:guest] '{query}' → {len(result)} tweets (guest token)")
                             return result
-                        logger.debug(f"[search:guest] qid {qid} → 0 after filter (raw={len(tweets)})")
+                        logger.debug(
+                            f"[search:guest] qid {qid} → 0 after filter (raw={len(tweets)})")
                     except Exception as e:
                         logger.debug(f"[search:guest] qid {qid} failed: {e}")
                         continue
@@ -630,8 +672,8 @@ class TwitterClient(TwitterAuth):
     # ── X List feed ────────────────────────────────────────────────────
 
     async def get_list_tweets(self, list_url: str, min_likes: int = 200, min_retweets: int = 0,
-                               max_age_minutes: int = 60, limit: int = 20,
-                               lang: str = "en") -> list[Tweet]:
+                              max_age_minutes: int = 60, limit: int = 20,
+                              lang: str = "en") -> list[Tweet]:
         match = re.search(r"/lists/(\d+)", list_url)
         if not match:
             logger.error(f"Invalid list URL: {list_url}")
@@ -650,29 +692,35 @@ class TwitterClient(TwitterAuth):
                     if qid != self._LIST_TIMELINE_QUERY_IDS[0]:
                         self._LIST_TIMELINE_QUERY_IDS.remove(qid)
                         self._LIST_TIMELINE_QUERY_IDS.insert(0, qid)
-                        logger.info(f"[QueryID] ListLatestTweetsTimeline updated to {qid}")
+                        logger.info(
+                            f"[QueryID] ListLatestTweetsTimeline updated to {qid}")
                     tweets = self._extract_timeline_tweets(data)
-                    result = self._filter_tweets(tweets, min_likes, min_retweets, max_age_minutes, limit, lang=lang)
-                    logger.info(f"[list:{list_id}] lang:{lang} → {len(result)} tweets")
+                    result = self._filter_tweets(
+                        tweets, min_likes, min_retweets, max_age_minutes, limit, lang=lang)
+                    logger.info(
+                        f"[list:{list_id}] lang:{lang} → {len(result)} tweets")
                     return result
             except Exception as e:
                 last_err = e
                 logger.debug(f"[list] queryId {qid} failed: {e}")
                 continue
-        logger.error(f"[list] All ListLatestTweetsTimeline queryIds failed. Last: {last_err}")
+        logger.error(
+            f"[list] All ListLatestTweetsTimeline queryIds failed. Last: {last_err}")
         return []
 
     # ── Recommendations (For You) ──────────────────────────────────────
 
     async def _search_via_home_timeline(self, query: str, min_likes: int = 10,
-                                          max_age_minutes: int = 60,
-                                          lang: str = "en", limit: int = 20) -> list[Tweet]:
+                                        max_age_minutes: int = 60,
+                                        lang: str = "en", limit: int = 20) -> list[Tweet]:
         if max_age_minutes > 0:
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+            cutoff = datetime.now(timezone.utc) - \
+                timedelta(minutes=max_age_minutes)
         else:
             cutoff = None
 
-        logger.info(f"[search:home] Keyword filter on HomeTimeline for '{query[:60]}'")
+        logger.info(
+            f"[search:home] Keyword filter on HomeTimeline for '{query[:60]}'")
         try:
             import json as _json
             endpoint = f"{GRAPHQL}/HJFjzBgCs16TqxewQOeLNg/HomeTimeline"
@@ -685,14 +733,17 @@ class TwitterClient(TwitterAuth):
             }
             data = await self._get(endpoint, params=params)
             if not data:
-                logger.warning("[search:home] HomeTimeline returned empty response")
+                logger.warning(
+                    "[search:home] HomeTimeline returned empty response")
                 return []
 
             tweets = self._extract_timeline_tweets(data)
 
             import re
-            clean = re.sub(r'\b(OR|AND)\b|-?filter:\S+|min_faves:\d+|since:\S+|until:\S+|lang:\S+', '', query)
-            keywords = [w.strip('()').lower() for w in clean.split() if len(w.strip('()')) > 2]
+            clean = re.sub(
+                r'\b(OR|AND)\b|-?filter:\S+|min_faves:\d+|since:\S+|until:\S+|lang:\S+', '', query)
+            keywords = [w.strip('()').lower()
+                        for w in clean.split() if len(w.strip('()')) > 2]
 
             def _matches(t: Tweet) -> bool:
                 text = t.text.lower()
@@ -714,14 +765,15 @@ class TwitterClient(TwitterAuth):
                 if len(result) >= limit:
                     break
 
-            logger.info(f"[search:home] HomeTimeline keyword filter → {len(result)} tweets (from {len(tweets)} total)")
+            logger.info(
+                f"[search:home] HomeTimeline keyword filter → {len(result)} tweets (from {len(tweets)} total)")
             return result
         except Exception as e:
             logger.warning(f"[search:home] Failed: {e}")
             return []
 
     async def get_recommended_tweets(self, min_likes: int = 200, limit: int = 20,
-                                      lang: str = "en") -> list[Tweet]:
+                                     lang: str = "en") -> list[Tweet]:
         endpoint = f"{GRAPHQL}/HJFjzBgCs16TqxewQOeLNg/HomeTimeline"
         params = {
             "variables": json.dumps({"count": 40, "includePromotedContent": False,
@@ -738,9 +790,11 @@ class TwitterClient(TwitterAuth):
             and (not lang or not t.lang or t.lang.lower() == lang.lower())
             and self._is_finance_topic(t.text)
         ][:limit]
-        filtered_out = len([t for t in tweets if t.likes >= min_likes]) - len(result)
+        filtered_out = len(
+            [t for t in tweets if t.likes >= min_likes]) - len(result)
         if filtered_out:
-            logger.debug(f"[recommendations] topic filter removed {filtered_out} off-topic tweets")
+            logger.debug(
+                f"[recommendations] topic filter removed {filtered_out} off-topic tweets")
         logger.info(f"[recommendations] lang:{lang} → {len(result)} tweets")
         return result
 
@@ -796,13 +850,15 @@ class TwitterClient(TwitterAuth):
                             if js_urls:
                                 break
                     except Exception as e:
-                        logger.debug(f"[QueryID] Failed to fetch {page_url}: {e}")
+                        logger.debug(
+                            f"[QueryID] Failed to fetch {page_url}: {e}")
 
                 if not js_urls:
                     logger.debug("[QueryID] No JS bundles found on any page")
                     return
 
-                logger.debug(f"[QueryID] Found {len(js_urls)} JS bundle URLs to scan")
+                logger.debug(
+                    f"[QueryID] Found {len(js_urls)} JS bundle URLs to scan")
 
                 _operations = {
                     "TweetDetail":               cls._TWEET_DETAIL_QUERY_IDS,
@@ -838,18 +894,23 @@ class TwitterClient(TwitterAuth):
                                 found.add(op_name)
                                 if qid not in id_list:
                                     id_list.insert(0, qid)
-                                    logger.success(f"[QueryID] New {op_name}: {qid}")
+                                    logger.success(
+                                        f"[QueryID] New {op_name}: {qid}")
                                 else:
-                                    logger.info(f"[QueryID] {op_name} confirmed: {qid}")
+                                    logger.info(
+                                        f"[QueryID] {op_name} confirmed: {qid}")
                     except Exception as e:
-                        logger.debug(f"[QueryID] JS parse error for {js_url}: {e}")
+                        logger.debug(
+                            f"[QueryID] JS parse error for {js_url}: {e}")
 
                 if not found:
-                    logger.debug("[QueryID] Could not extract queryIds — using known IDs")
+                    logger.debug(
+                        "[QueryID] Could not extract queryIds — using known IDs")
                 else:
                     missing = set(_operations) - found
                     if missing:
-                        logger.debug(f"[QueryID] Not found in bundles: {missing} — using known IDs")
+                        logger.debug(
+                            f"[QueryID] Not found in bundles: {missing} — using known IDs")
         except Exception as e:
             logger.debug(f"[QueryID] Discovery failed: {e}")
 
@@ -896,7 +957,8 @@ class TwitterClient(TwitterAuth):
         data = {}
         for qid in self._TWEET_DETAIL_QUERY_IDS:
             endpoint = f"{GRAPHQL}/{qid}/TweetDetail"
-            params = {"variables": variables, "features": features, "fieldToggles": fieldToggles}
+            params = {"variables": variables,
+                      "features": features, "fieldToggles": fieldToggles}
             try:
                 result = await self._get(endpoint, params=params)
                 if result:
@@ -907,8 +969,8 @@ class TwitterClient(TwitterAuth):
         comments: list[Comment] = []
         try:
             instructions = (data.get("data", {})
-                               .get("threaded_conversation_with_injections_v2", {})
-                               .get("instructions", []))
+                            .get("threaded_conversation_with_injections_v2", {})
+                            .get("instructions", []))
             for instr in instructions:
                 for entry in instr.get("entries", []):
                     entry_id = entry.get("entryId", "")
@@ -917,7 +979,8 @@ class TwitterClient(TwitterAuth):
                     if entry_id.startswith("tweet-"):
                         item = content_entry.get("itemContent", {})
                         if item.get("itemType") == "TimelineTweet":
-                            t = self._parse_tweet(item.get("tweet_results", {}).get("result", {}))
+                            t = self._parse_tweet(
+                                item.get("tweet_results", {}).get("result", {}))
                             if t and t.id != tweet.id:
                                 comments.append(Comment(id=t.id, text=t.text,
                                                         author_username=t.author_username,
@@ -928,7 +991,8 @@ class TwitterClient(TwitterAuth):
                         for it in content_entry.get("items", []):
                             item = it.get("item", {}).get("itemContent", {})
                             if item.get("itemType") == "TimelineTweet":
-                                t = self._parse_tweet(item.get("tweet_results", {}).get("result", {}))
+                                t = self._parse_tweet(
+                                    item.get("tweet_results", {}).get("result", {}))
                                 if t and t.id != tweet.id:
                                     comments.append(Comment(id=t.id, text=t.text,
                                                             author_username=t.author_username,
@@ -936,14 +1000,16 @@ class TwitterClient(TwitterAuth):
                                                             created_at=t.created_at))
                         item = content_entry.get("itemContent", {})
                         if item.get("itemType") == "TimelineTweet":
-                            t = self._parse_tweet(item.get("tweet_results", {}).get("result", {}))
+                            t = self._parse_tweet(
+                                item.get("tweet_results", {}).get("result", {}))
                             if t and t.id != tweet.id:
                                 comments.append(Comment(id=t.id, text=t.text,
                                                         author_username=t.author_username,
                                                         likes=t.likes, views=t.views,
                                                         created_at=t.created_at))
 
-            logger.debug(f"[comments] tweet={tweet.id} -> {len(comments)} candidates found")
+            logger.debug(
+                f"[comments] tweet={tweet.id} -> {len(comments)} candidates found")
         except Exception as e:
             logger.debug(f"Comment parse error: {e}")
 
@@ -953,14 +1019,17 @@ class TwitterClient(TwitterAuth):
         if own_username:
             own_lower = own_username.lstrip("@").lower()
             before = len(comments)
-            comments = [c for c in comments if c.author_username.lower() != own_lower]
+            comments = [c for c in comments if c.author_username.lower()
+                        != own_lower]
             if len(comments) < before:
-                logger.debug(f"[comments] Filtered out {before - len(comments)} own-account comment(s)")
+                logger.debug(
+                    f"[comments] Filtered out {before - len(comments)} own-account comment(s)")
 
         if not comments:
             return None
 
-        comments.sort(key=lambda c: c.views if sort_by == "views" else c.likes, reverse=True)
+        comments.sort(key=lambda c: c.views if sort_by ==
+                      "views" else c.likes, reverse=True)
         return comments[0]
 
     # ── Post reply ─────────────────────────────────────────────────────
@@ -982,7 +1051,8 @@ class TwitterClient(TwitterAuth):
         try:
             from browser_poster import get_browser_poster
             poster = await get_browser_poster()
-            logger.info(f"[Acc {self.account_id}] 🌐 Browser → reply to {in_reply_to_tweet_id}")
+            logger.info(
+                f"[Acc {self.account_id}] 🌐 Browser → reply to {in_reply_to_tweet_id}")
             tweet_id = await poster.post_reply(
                 account_id=self.account_id,
                 auth_token=self._auth_token,
@@ -991,13 +1061,49 @@ class TwitterClient(TwitterAuth):
                 in_reply_to_id=in_reply_to_tweet_id,
             )
             if tweet_id:
-                logger.success(f"[Acc {self.account_id}] ✅ Browser posted → {tweet_id}")
+                logger.success(
+                    f"[Acc {self.account_id}] ✅ Browser posted → {tweet_id}")
+                return tweet_id
+
+            logger.warning(
+                f"[Acc {self.account_id}] Browser не смог опубликовать — fallback to API")
+        except ModuleNotFoundError as e:
+            if not self._browser_poster_missing_logged:
+                logger.warning(
+                    f"[Acc {self.account_id}] browser_poster недоступен: {e}")
+                self._browser_poster_missing_logged = True
             else:
-                logger.warning(f"[Acc {self.account_id}] Browser не смог опубликовать")
-            return tweet_id
+                logger.debug(
+                    f"[Acc {self.account_id}] browser_poster missing: {e}")
         except Exception as e:
-            logger.error(f"[Acc {self.account_id}] Browser post error: {e}")
-            return None
+            logger.warning(
+                f"[Acc {self.account_id}] Browser post unavailable: {e}")
+
+        # Fallback chain when browser poster is unavailable/missing.
+        # Keep order stable: GraphQL first, then legacy REST variants.
+        methods = [
+            ("graphql", self._post_reply_graphql),
+            ("v1.1", self._post_reply_v1),
+            ("v1.1-alt", self._post_reply_v1_alt),
+        ]
+        for name, method in methods:
+            try:
+                tweet_id = await method(reply_text, in_reply_to_tweet_id, tweet_url=tweet_url)
+                if tweet_id:
+                    return tweet_id
+            except TwitterClient._PostRestricted:
+                logger.info(
+                    f"[Acc {self.account_id}] {name}: target post is restricted/unavailable")
+                return POST_UNAVAILABLE
+            except TwitterClient._PostUnavailable:
+                logger.info(
+                    f"[Acc {self.account_id}] {name}: target post unavailable")
+                return POST_UNAVAILABLE
+            except Exception as e:
+                logger.debug(
+                    f"[Acc {self.account_id}] {name} reply exception: {e}")
+
+        return None
 
     # ── Like tweet (Фаза 3 — FavoriteTweet GraphQL) ───────────────────
 
@@ -1034,42 +1140,51 @@ class TwitterClient(TwitterAuth):
 
                 # Успех: {"data": {"favorite_tweet": "Done"}}
                 if data.get("data", {}).get("favorite_tweet") == "Done":
-                    logger.success(f"[Acc {self.account_id}] ❤️  Liked tweet {tweet_id}")
+                    logger.success(
+                        f"[Acc {self.account_id}] ❤️  Liked tweet {tweet_id}")
                     return True
 
                 errors = data.get("errors", [])
                 for err in errors:
                     code = err.get("code")
-                    msg  = err.get("message", "")[:100]
+                    msg = err.get("message", "")[:100]
 
                     if code == 139:
                         # Уже лайкнуто — не ошибка
-                        logger.debug(f"[Acc {self.account_id}] Tweet {tweet_id} already liked")
+                        logger.debug(
+                            f"[Acc {self.account_id}] Tweet {tweet_id} already liked")
                         return True
 
                     if code == 179:
-                        logger.warning(f"[Acc {self.account_id}] Like restricted on {tweet_id}: {msg}")
+                        logger.warning(
+                            f"[Acc {self.account_id}] Like restricted on {tweet_id}: {msg}")
                         return False
 
                     if code in (32, 135, 326):
-                        logger.error(f"[Acc {self.account_id}] Auth error {code} on like: {msg}")
+                        logger.error(
+                            f"[Acc {self.account_id}] Auth error {code} on like: {msg}")
                         return False
 
                     if code == 226:
-                        logger.error(f"[Acc {self.account_id}] Anti-bot 226 on like")
+                        logger.error(
+                            f"[Acc {self.account_id}] Anti-bot 226 on like")
                         return False
 
-                    logger.warning(f"[Acc {self.account_id}] Like error {code}: {msg}")
+                    logger.warning(
+                        f"[Acc {self.account_id}] Like error {code}: {msg}")
 
                 # Нет known error — пробуем следующий queryId
-                logger.debug(f"[Acc {self.account_id}] FavoriteTweet qid={qid} gave no 'Done', trying next")
+                logger.debug(
+                    f"[Acc {self.account_id}] FavoriteTweet qid={qid} gave no 'Done', trying next")
                 continue
 
             except Exception as e:
-                logger.error(f"[Acc {self.account_id}] like_tweet({tweet_id}) error: {e}")
+                logger.error(
+                    f"[Acc {self.account_id}] like_tweet({tweet_id}) error: {e}")
                 continue
 
-        logger.error(f"[Acc {self.account_id}] All FavoriteTweet queryIds exhausted for {tweet_id}")
+        logger.error(
+            f"[Acc {self.account_id}] All FavoriteTweet queryIds exhausted for {tweet_id}")
         return False
 
     async def bookmark_tweet(self, tweet_id: str) -> bool:
@@ -1085,7 +1200,8 @@ class TwitterClient(TwitterAuth):
             )
             data = await self._post_form(url, {"tweet_id": tweet_id})
             if data.get("bookmarked") is True or data.get("id_str"):
-                logger.success(f"[Acc {self.account_id}] 🔖 Bookmarked tweet {tweet_id}")
+                logger.success(
+                    f"[Acc {self.account_id}] 🔖 Bookmarked tweet {tweet_id}")
                 return True
             if data.get("errors"):
                 logger.warning(
@@ -1093,7 +1209,8 @@ class TwitterClient(TwitterAuth):
                 )
             return False
         except Exception as e:
-            logger.error(f"[Acc {self.account_id}] bookmark_tweet({tweet_id}) error: {e}")
+            logger.error(
+                f"[Acc {self.account_id}] bookmark_tweet({tweet_id}) error: {e}")
             return False
 
     async def visit_profile(self, username: str) -> bool:
@@ -1110,20 +1227,23 @@ class TwitterClient(TwitterAuth):
             resp = await self._client.get(profile_url)
             ok = int(resp.status_code) < 400
             if ok:
-                logger.info(f"[Acc {self.account_id}] 👀 Visited profile @{username}")
+                logger.info(
+                    f"[Acc {self.account_id}] 👀 Visited profile @{username}")
             return ok
         except Exception as e:
-            logger.debug(f"[Acc {self.account_id}] visit_profile({username}) error: {e}")
+            logger.debug(
+                f"[Acc {self.account_id}] visit_profile({username}) error: {e}")
             return False
 
     # ── Legacy REST methods (kept for reference) ──────────────────────
 
     async def _post_reply_v1(self, reply_text: str, in_reply_to_tweet_id: str,
-                              tweet_url: Optional[str] = None) -> Optional[str]:
+                             tweet_url: Optional[str] = None) -> Optional[str]:
         url = "https://x.com/i/api/1.1/statuses/update.json"
         referer = tweet_url or "https://x.com/home"
         from urllib.parse import urlparse
-        self._refresh_request_headers(referer, method="POST", path=urlparse(url).path)
+        self._refresh_request_headers(
+            referer, method="POST", path=urlparse(url).path)
         form_data = {
             "status": reply_text,
             "in_reply_to_status_id": in_reply_to_tweet_id,
@@ -1142,11 +1262,12 @@ class TwitterClient(TwitterAuth):
             return None
 
     async def _post_reply_v1_alt(self, reply_text: str, in_reply_to_tweet_id: str,
-                                   tweet_url: Optional[str] = None) -> Optional[str]:
+                                 tweet_url: Optional[str] = None) -> Optional[str]:
         url = "https://x.com/i/api/1.1/statuses/update.json"
         referer = tweet_url or "https://x.com/home"
         from urllib.parse import urlparse
-        self._refresh_request_headers(referer, method="POST", path=urlparse(url).path)
+        self._refresh_request_headers(
+            referer, method="POST", path=urlparse(url).path)
         form_data = {
             "status": reply_text,
             "in_reply_to_status_id": in_reply_to_tweet_id,
@@ -1185,20 +1306,23 @@ class TwitterClient(TwitterAuth):
     def _parse_v1_response(self, data: dict, method_name: str) -> Optional[str]:
         tweet_id = data.get("id_str") or str(data.get("id", ""))
         if tweet_id and tweet_id not in ("", "0"):
-            logger.success(f"[Acc {self.account_id}] {method_name} replied → {tweet_id}")
+            logger.success(
+                f"[Acc {self.account_id}] {method_name} replied → {tweet_id}")
             return tweet_id
 
         errors = data.get("errors", [])
         for err in errors:
             code = err.get("code", 0)
-            msg  = err.get("message", "")[:200]
+            msg = err.get("message", "")[:200]
 
             if code == 187:
-                logger.warning(f"[Acc {self.account_id}] {method_name}: duplicate tweet — skipping")
+                logger.warning(
+                    f"[Acc {self.account_id}] {method_name}: duplicate tweet — skipping")
                 return None
 
             if code == 226:
-                logger.warning(f"[Acc {self.account_id}] {method_name} anti-bot 226 — skipping")
+                logger.warning(
+                    f"[Acc {self.account_id}] {method_name} anti-bot 226 — skipping")
                 return None
 
             if code in self._SKIP_POST_ERRORS:
@@ -1208,7 +1332,8 @@ class TwitterClient(TwitterAuth):
                     f"(code {code} — {reason})"
                 )
                 if code == 179:
-                    raise TwitterClient._PostRestricted(f"code {code} — {reason}")
+                    raise TwitterClient._PostRestricted(
+                        f"code {code} — {reason}")
                 raise TwitterClient._PostUnavailable(f"code {code} — {reason}")
 
             if code in self._ACCOUNT_ERRORS:
@@ -1219,16 +1344,18 @@ class TwitterClient(TwitterAuth):
                 )
                 return None
 
-            logger.warning(f"[Acc {self.account_id}] {method_name} error code={code}: {msg}")
+            logger.warning(
+                f"[Acc {self.account_id}] {method_name} error code={code}: {msg}")
 
         if errors:
             return None
         if data:
-            logger.debug(f"[{method_name}] Unexpected response (no id_str, no errors): {str(data)[:300]}")
+            logger.debug(
+                f"[{method_name}] Unexpected response (no id_str, no errors): {str(data)[:300]}")
         return None
 
     async def _post_reply_graphql(self, reply_text: str, in_reply_to_tweet_id: str,
-                                   tweet_url: Optional[str] = None) -> Optional[str]:
+                                  tweet_url: Optional[str] = None) -> Optional[str]:
         features = {
             "communities_web_enable_tweet_community_results_fetch": True,
             "c9s_tweet_anatomy_moderator_badge_enabled": True,
@@ -1284,7 +1411,7 @@ class TwitterClient(TwitterAuth):
                 errors = data.get("errors", [])
                 for err in errors:
                     code = err.get("code")
-                    msg  = err.get("message", "")[:120]
+                    msg = err.get("message", "")[:120]
                     if code == 226:
                         cooldown = random.uniform(35 * 60, 65 * 60)
                         logger.error(
@@ -1294,24 +1421,33 @@ class TwitterClient(TwitterAuth):
                         await asyncio.sleep(cooldown)
                         return None
                     if code == 179:
-                        logger.info(f"[Acc {self.account_id}] GraphQL 179 — reply restricted, skipping")
-                        return None
+                        logger.info(
+                            f"[Acc {self.account_id}] GraphQL 179 — reply restricted, skipping")
+                        raise TwitterClient._PostRestricted(
+                            f"code {code}: {msg}")
+                    if code == 433:
+                        logger.info(
+                            f"[Acc {self.account_id}] GraphQL 433 — author restricted replies, skipping")
+                        raise TwitterClient._PostRestricted(
+                            f"code {code}: {msg}")
                     if code in (32, 135, 326):
                         logger.error(
                             f"[Acc {self.account_id}] GraphQL blocked "
                             f"(code {code}): {msg}"
                         )
                         return None
-                    logger.warning(f"[Acc {self.account_id}] GraphQL error {code}: {msg}")
+                    logger.warning(
+                        f"[Acc {self.account_id}] GraphQL error {code}: {msg}")
                 new_tweet = (data.get("data", {}).get("create_tweet", {})
-                                .get("tweet_results", {}).get("result", {}))
+                             .get("tweet_results", {}).get("result", {}))
                 tweet_id = (new_tweet.get("rest_id")
                             or new_tweet.get("legacy", {}).get("id_str"))
                 if tweet_id:
                     if qid != self._CREATE_TWEET_QUERY_IDS[0]:
                         self._CREATE_TWEET_QUERY_IDS.remove(qid)
                         self._CREATE_TWEET_QUERY_IDS.insert(0, qid)
-                    logger.success(f"[Acc {self.account_id}] GraphQL replied → {tweet_id}")
+                    logger.success(
+                        f"[Acc {self.account_id}] GraphQL replied → {tweet_id}")
                     return tweet_id
             except Exception as e:
                 logger.debug(f"[GraphQL:{qid}] failed: {e}")
