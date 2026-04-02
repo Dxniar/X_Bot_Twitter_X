@@ -19,6 +19,7 @@ GRAPHQL = _GRAPHQL_ORIG.replace("https://twitter.com", "https://x.com")
 
 # Sentinel returned by post_reply when the target post is unavailable
 POST_UNAVAILABLE = object()
+_BROWSER_POSTER_MISSING_LOGGED = False
 
 # ─────────────────────────────────────────────
 # DATA MODELS
@@ -979,6 +980,7 @@ class TwitterClient(TwitterAuth):
 
     async def post_reply(self, reply_text: str, in_reply_to_tweet_id: str,
                          tweet_url: Optional[str] = None) -> Optional[str]:
+        global _BROWSER_POSTER_MISSING_LOGGED
         try:
             from browser_poster import get_browser_poster
             poster = await get_browser_poster()
@@ -992,12 +994,40 @@ class TwitterClient(TwitterAuth):
             )
             if tweet_id:
                 logger.success(f"[Acc {self.account_id}] ✅ Browser posted → {tweet_id}")
+                return tweet_id
+
+            logger.warning(f"[Acc {self.account_id}] Browser не смог опубликовать — fallback to API")
+        except ModuleNotFoundError as e:
+            if not _BROWSER_POSTER_MISSING_LOGGED:
+                logger.warning(f"[Acc {self.account_id}] browser_poster недоступен: {e}")
+                _BROWSER_POSTER_MISSING_LOGGED = True
             else:
-                logger.warning(f"[Acc {self.account_id}] Browser не смог опубликовать")
-            return tweet_id
+                logger.debug(f"[Acc {self.account_id}] browser_poster missing: {e}")
         except Exception as e:
-            logger.error(f"[Acc {self.account_id}] Browser post error: {e}")
-            return None
+            logger.warning(f"[Acc {self.account_id}] Browser post unavailable: {e}")
+
+        # Fallback chain when browser poster is unavailable/missing.
+        # Keep order stable: GraphQL first, then legacy REST variants.
+        methods = [
+            ("graphql", self._post_reply_graphql),
+            ("v1.1", self._post_reply_v1),
+            ("v1.1-alt", self._post_reply_v1_alt),
+        ]
+        for name, method in methods:
+            try:
+                tweet_id = await method(reply_text, in_reply_to_tweet_id, tweet_url=tweet_url)
+                if tweet_id:
+                    return tweet_id
+            except TwitterClient._PostRestricted:
+                logger.info(f"[Acc {self.account_id}] {name}: target post is restricted/unavailable")
+                return POST_UNAVAILABLE
+            except TwitterClient._PostUnavailable:
+                logger.info(f"[Acc {self.account_id}] {name}: target post unavailable")
+                return POST_UNAVAILABLE
+            except Exception as e:
+                logger.debug(f"[Acc {self.account_id}] {name} reply exception: {e}")
+
+        return None
 
     # ── Like tweet (Фаза 3 — FavoriteTweet GraphQL) ───────────────────
 
@@ -1295,7 +1325,10 @@ class TwitterClient(TwitterAuth):
                         return None
                     if code == 179:
                         logger.info(f"[Acc {self.account_id}] GraphQL 179 — reply restricted, skipping")
-                        return None
+                        raise TwitterClient._PostRestricted(f"code {code}: {msg}")
+                    if code == 433:
+                        logger.info(f"[Acc {self.account_id}] GraphQL 433 — author restricted replies, skipping")
+                        raise TwitterClient._PostRestricted(f"code {code}: {msg}")
                     if code in (32, 135, 326):
                         logger.error(
                             f"[Acc {self.account_id}] GraphQL blocked "
@@ -1313,6 +1346,8 @@ class TwitterClient(TwitterAuth):
                         self._CREATE_TWEET_QUERY_IDS.insert(0, qid)
                     logger.success(f"[Acc {self.account_id}] GraphQL replied → {tweet_id}")
                     return tweet_id
+            except (TwitterClient._PostRestricted, TwitterClient._PostUnavailable):
+                raise
             except Exception as e:
                 logger.debug(f"[GraphQL:{qid}] failed: {e}")
                 await asyncio.sleep(random.uniform(3, 8))
