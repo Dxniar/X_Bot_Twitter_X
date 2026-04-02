@@ -694,6 +694,7 @@ class XBotApp(tk.Tk):
                     ("min_likes", BotDefaults.min_likes),
                     ("min_retweets", BotDefaults.min_retweets),
                     ("max_age_min", BotDefaults.max_post_age_minutes),
+                    ("lang_filter", BotDefaults.lang_filter),
                     ("comment_sort", BotDefaults.comment_sort),
                     ("reply_mode", "hybrid"),
                     ("auto_publish", BotDefaults.auto_publish),
@@ -983,6 +984,7 @@ class XBotApp(tk.Tk):
         field(1, 0, "Min Likes",    "min_likes")
         field(2, 0, "Min Retweets", "min_retweets")
         field(3, 0, "Max Age (min)", "max_age_min")
+        field(7, 0, "Language", "lang_filter")
         field(4, 0, "Comment Sort", "comment_sort",
               "combo", ["likes", "views"])
         field(5, 0, "Reply Mode",   "reply_mode",
@@ -999,7 +1001,7 @@ class XBotApp(tk.Tk):
               "enable_manual_extra_actions", "check")
         field(7, 1, "Hourly Cap", "hourly_cap")
         field(8, 1, "Burst/30m Cap", "burst_30min_cap")
-        field(9, 1, "Simple Filters", "simple_filters", "check")
+        field(9, 1, "Simple Mode (legacy)", "simple_filters", "check")
         field(10, 1, "Like After Reply", "like_after_reply", "check")
         field(11, 1, "Bookmark After Reply", "bookmark_after_reply", "check")
         field(12, 1, "Visit Profile After",
@@ -1095,6 +1097,7 @@ class XBotApp(tk.Tk):
             from ai import generate_reply
             from proxy import proxy_manager
             from config import BotDefaults
+            from filters import TweetFilterPolicy
 
             acc = await get_account(acc_id)
             if not acc:
@@ -1102,12 +1105,11 @@ class XBotApp(tk.Tk):
 
             settings = await get_all_settings(acc_id)
             mode = settings.get("search_mode",  BotDefaults.search_mode)
-            min_likes = int(settings.get(
-                "min_likes",    BotDefaults.min_likes) or BotDefaults.min_likes)
-            min_rt = int(settings.get("min_retweets",
-                         BotDefaults.min_retweets) or BotDefaults.min_retweets)
-            max_age = int(settings.get(
-                "max_age_min",  BotDefaults.max_post_age_minutes) or BotDefaults.max_post_age_minutes)
+            filter_cfg = TweetFilterPolicy.from_settings(settings)
+            min_likes = filter_cfg.min_likes
+            min_rt = filter_cfg.min_retweets
+            max_age = filter_cfg.max_age_minutes
+            lang = filter_cfg.lang
             sort_by = settings.get("comment_sort", BotDefaults.comment_sort)
             ai_provider = settings.get("ai_provider", None)
             system_prompt = settings.get(
@@ -1127,7 +1129,7 @@ class XBotApp(tk.Tk):
 
                 lines = [("✅ Session OK — @" + username, "ok")]
                 lines.append(
-                    (f"⚙️  mode={mode}  min_likes={min_likes}  max_age={max_age}min  AI={ai_provider}", ""))
+                    (f"⚙️  mode={mode}  min_likes={min_likes}  min_rt={min_rt}  max_age={max_age}min  lang={lang or 'any'}  AI={ai_provider}", ""))
 
                 # ── Fetch tweets (with fallback to recommendations) ──
                 tweets = []
@@ -1138,32 +1140,32 @@ class XBotApp(tk.Tk):
                             (f"🔍 Searching keywords: {keywords[:3]}", ""))
                         for kw in keywords[:3]:
                             res = await client.search_tweets(kw, min_likes=min_likes,
-                                                             min_retweets=min_rt, max_age_minutes=max_age, limit=10)
+                                                             min_retweets=min_rt, max_age_minutes=max_age, lang=lang, limit=10)
                             tweets.extend(res)
                     if not tweets:
                         lines.append(
                             ("⚠️ Keyword search returned 0 — trying recommendations...", "err"))
-                        tweets = await client.get_recommended_tweets(min_likes=0, limit=20)
+                        tweets = await client.get_recommended_tweets(min_likes=0, lang=lang, limit=20)
 
                 elif mode == "list":
                     urls = await get_x_lists(acc_id)
                     if urls:
                         for url in urls[:3]:
                             res = await client.get_list_tweets(url, min_likes=min_likes,
-                                                               min_retweets=min_rt, max_age_minutes=max_age, limit=10)
+                                                               min_retweets=min_rt, max_age_minutes=max_age, lang=lang, limit=10)
                             tweets.extend(res)
                     if not tweets:
                         lines.append(
                             ("⚠️ List returned 0 — trying recommendations...", "err"))
-                        tweets = await client.get_recommended_tweets(min_likes=0, limit=20)
+                        tweets = await client.get_recommended_tweets(min_likes=0, lang=lang, limit=20)
 
                 else:  # recommendations
                     # Try with user's min_likes first, then fall back to 0 if empty
-                    tweets = await client.get_recommended_tweets(min_likes=min_likes, limit=20)
+                    tweets = await client.get_recommended_tweets(min_likes=min_likes, lang=lang, limit=20)
                     if not tweets and min_likes > 0:
                         lines.append(
                             (f"⚠️ No tweets with min_likes={min_likes} — retrying with min_likes=0...", "err"))
-                        tweets = await client.get_recommended_tweets(min_likes=0, limit=20)
+                        tweets = await client.get_recommended_tweets(min_likes=0, lang=lang, limit=20)
 
                 if not tweets:
                     lines.append(

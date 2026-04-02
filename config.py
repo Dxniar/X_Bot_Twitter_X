@@ -162,6 +162,7 @@ class BotDefaults:
     hourly_cap = 12
     burst_30min_cap = 6
     simple_filters = False
+    lang_filter = "en"
     like_after_reply = True
     bookmark_after_reply = False
     visit_profile_after_reply = False
